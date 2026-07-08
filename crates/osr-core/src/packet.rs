@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::protocol::{PacketKind, PROTOCOL_VERSION, OSR_MAGIC};
+use crate::protocol::{PacketKind, OSR_MAGIC, PROTOCOL_VERSION};
 
 /// v1 header size in bytes.
 ///

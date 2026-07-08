@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "crates/osr-core",
+    "crates/osr-net",
     "crates/osr-cli",
+    "crates/osr-desktop",
 ]
 resolver = "2"
 
@@ -9,3 +11,7 @@ resolver = "2"
 edition = "2021"
 license = "MPL-2.0"
 repository = "https://github.com/sakusdev/OpenSoundRelay"
+
+[workspace.dependencies]
+osr-core = { path = "crates/osr-core" }
+osr-net = { path = "crates/osr-net" }

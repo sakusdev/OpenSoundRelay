@@ -30,7 +30,9 @@ impl PcmAudioOutput {
             SampleFormat::F32 => device
                 .build_output_stream(
                     &config,
-                    move |data: &mut [f32], _| write_output_f32(data, channels, &queue_for_callback),
+                    move |data: &mut [f32], _| {
+                        write_output_f32(data, channels, &queue_for_callback)
+                    },
                     err_fn,
                     None,
                 )
@@ -38,7 +40,9 @@ impl PcmAudioOutput {
             SampleFormat::I16 => device
                 .build_output_stream(
                     &config,
-                    move |data: &mut [i16], _| write_output_i16(data, channels, &queue_for_callback),
+                    move |data: &mut [i16], _| {
+                        write_output_i16(data, channels, &queue_for_callback)
+                    },
                     err_fn,
                     None,
                 )
@@ -46,7 +50,9 @@ impl PcmAudioOutput {
             SampleFormat::U16 => device
                 .build_output_stream(
                     &config,
-                    move |data: &mut [u16], _| write_output_u16(data, channels, &queue_for_callback),
+                    move |data: &mut [u16], _| {
+                        write_output_u16(data, channels, &queue_for_callback)
+                    },
                     err_fn,
                     None,
                 )

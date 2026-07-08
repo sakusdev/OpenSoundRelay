@@ -4,24 +4,27 @@ OpenSoundRelay (OSR) is an open-source, cross-platform audio relay protocol and 
 
 The first product target is **Android-to-Android live audio relay**, but the protocol and core library are designed so Android, iOS, Windows, macOS, Linux, and Web clients can interoperate.
 
+## Current status
+
+OSR is now a functional prototype with:
+
+- Rust protocol core
+- shared UDP transport crate
+- CLI tools
+- Android-to-Android PCM sender/receiver app
+- desktop GUI for Linux/Windows/macOS protocol testing
+- parent-authoritative stream volume synchronization
+- cross-platform GitHub Actions build workflows
+
+It is still pre-release software. The next major quality step is Opus audio and real-device latency tuning.
+
 ## Key idea
 
-OSR separates the project into two layers:
+OSR separates the project into three layers:
 
 1. **OSR Core**: portable protocol, packets, volume synchronization, timing, and audio-frame rules.
-2. **Platform Apps**: Android, iOS, desktop, and Web implementations that connect to the same protocol.
-
-This repository currently contains:
-
-- MPL-2.0 license setup
-- Rust workspace
-- `osr-core` protocol library
-- OSR v1 packet header
-- OSR `AudioFrame` envelope
-- fixed-point parent/child volume synchronization
-- CLI demo for volume sync packets
-- Android-to-Android PCM prototype app
-- protocol and architecture docs
+2. **OSR Net**: cross-platform UDP transport and packet routing.
+3. **Platform Apps**: Android, iOS, desktop, and Web implementations that connect to the same protocol.
 
 ## Volume synchronization model
 
@@ -63,10 +66,12 @@ parent OS master volume -> every child OS master volume
 ## Repository layout
 
 ```text
-android/app/        Android PCM prototype app
-crates/osr-core/    Portable protocol and volume sync core
-crates/osr-cli/     Small CLI demo for cross-platform volume sync packets
-docs/               Architecture and protocol specs
+android/app/         Android PCM prototype app
+crates/osr-core/     Portable protocol and volume sync core
+crates/osr-net/      Cross-platform UDP transport
+crates/osr-cli/      CLI receiver, volume sender, and tone sender
+crates/osr-desktop/  Cross-platform desktop GUI
+docs/                Architecture, protocol, networking, and build docs
 ```
 
 ## Try the Android PCM prototype
@@ -81,21 +86,39 @@ The Android app currently supports manual Android-to-Android testing over Wi-Fi:
 
 See [docs/android-prototype.md](./docs/android-prototype.md).
 
-## Try the volume sync CLI demo
-
-Terminal 1:
+## Try the desktop GUI
 
 ```bash
-cargo run -p osr-cli -- child --bind 127.0.0.1:40124
+cargo run -p osr-desktop
 ```
 
-Terminal 2:
+The GUI can run as a UDP receiver or a tone sender for protocol testing.
+
+See [docs/desktop-gui.md](./docs/desktop-gui.md).
+
+## Try the CLI
+
+Receiver:
+
+```bash
+cargo run -p osr-cli -- child --bind 0.0.0.0:40124
+```
+
+Tone sender:
+
+```bash
+cargo run -p osr-cli -- tone --target 127.0.0.1:40124
+```
+
+Volume sender:
 
 ```bash
 cargo run -p osr-cli -- host --target 127.0.0.1:40124 --volume 0.35
 ```
 
-The child should print the parent-controlled volume as a deterministic fixed-point value.
+## Build
+
+See [docs/build.md](./docs/build.md).
 
 ## License
 

@@ -32,9 +32,9 @@
 - [x] desktop GUI receiver
 - [x] desktop GUI tone sender
 - [x] desktop parent volume slider
+- [x] desktop audio playback
 - [x] Linux/Windows/macOS Rust CI
 - [x] manual release build workflow
-- [ ] desktop audio playback
 - [ ] desktop microphone capture
 
 ## v0.3: High-quality low-latency audio
@@ -59,9 +59,9 @@
 - [x] Linux GUI protocol receiver
 - [x] Windows GUI protocol receiver
 - [x] macOS GUI protocol receiver
-- [ ] Linux audio receiver
-- [ ] Windows audio receiver
-- [ ] macOS audio receiver
+- [x] Linux PCM audio receiver
+- [x] Windows PCM audio receiver
+- [x] macOS PCM audio receiver
 - [ ] Web receiver prototype
 - [ ] shared protocol conformance tests
 

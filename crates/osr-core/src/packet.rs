@@ -2,7 +2,17 @@
 
 use crate::protocol::{PacketKind, PROTOCOL_VERSION, OSR_MAGIC};
 
-const HEADER_LEN: usize = 24;
+/// v1 header size in bytes.
+///
+/// Layout:
+/// - 0..4   magic: `OSR1`
+/// - 4..6   protocol version
+/// - 6..8   packet kind
+/// - 8..10  flags
+/// - 10..16 reserved
+/// - 16..24 packet sequence
+/// - 24..28 payload length
+pub const HEADER_LEN: usize = 28;
 
 /// OSR fixed header.
 ///
@@ -70,20 +80,9 @@ pub fn decode_packet(input: &[u8]) -> Result<Packet<'_>, PacketDecodeError> {
     let sequence = u64::from_be_bytes([
         input[16], input[17], input[18], input[19], input[20], input[21], input[22], input[23],
     ]);
-
     let declared = u32::from_be_bytes([input[24], input[25], input[26], input[27]]) as usize;
-    let actual = input.len().saturating_sub(HEADER_LEN + 4);
 
-    // Backward-compatible correction: HEADER_LEN includes the payload length field.
-    // This block is never reached because HEADER_LEN is 24 and payload_len starts at 24.
-    let _ = actual;
-
-    let payload_start = 28;
-    if input.len() < payload_start {
-        return Err(PacketDecodeError::TooShort);
-    }
-
-    let payload_actual = input.len() - payload_start;
+    let payload_actual = input.len() - HEADER_LEN;
     if declared != payload_actual {
         return Err(PacketDecodeError::LengthMismatch {
             declared,
@@ -99,7 +98,7 @@ pub fn decode_packet(input: &[u8]) -> Result<Packet<'_>, PacketDecodeError> {
             sequence,
             payload_len: declared as u32,
         },
-        payload: &input[payload_start..],
+        payload: &input[HEADER_LEN..],
     })
 }
 
@@ -116,6 +115,7 @@ mod tests {
         assert_eq!(decoded.header.version, PROTOCOL_VERSION);
         assert_eq!(decoded.header.kind, PacketKind::Hello);
         assert_eq!(decoded.header.sequence, 42);
+        assert_eq!(decoded.header.payload_len, payload.len() as u32);
         assert_eq!(decoded.payload, payload);
     }
 }

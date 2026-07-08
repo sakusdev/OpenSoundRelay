@@ -12,13 +12,14 @@ It is built with Rust and egui/eframe so the same source can run on:
 
 - UDP receiver mode
 - PCM tone sender mode
+- multi-target tone sender fan-out
 - parent volume slider
 - volume command sending
 - OSR audio packet logging
 - OSR volume command logging
 - PCM S16LE mono playback through the default desktop output device
 
-The desktop GUI can now be used as a basic desktop receiver for OSR PCM prototype streams.
+The desktop GUI can now be used as a basic desktop receiver for OSR PCM prototype streams, or as a desktop parent that sends a test tone to multiple children.
 
 ## Run
 
@@ -30,17 +31,25 @@ cargo run -p osr-desktop
 
 Then press **Start Receiver + Playback**.
 
-Tone sender:
+Tone sender fan-out:
 
-1. Enter the receiver address, for example `192.168.1.50:40124`.
-2. Press **Start Tone Sender**.
+1. Enter one or more receiver addresses, one per line or comma-separated.
+2. Press **Start Tone Sender Fan-out**.
 3. Move the parent volume slider.
+
+Example targets:
+
+```text
+192.168.1.50:40124
+192.168.1.51:40124
+192.168.1.52:40124
+```
 
 ## Test combinations
 
 - Android sender -> desktop receiver
-- desktop tone sender -> Android receiver
-- desktop tone sender -> desktop receiver
+- desktop tone sender -> multiple Android receivers
+- desktop tone sender -> multiple desktop receivers
 - CLI tone sender -> desktop receiver
 
 ## Current limitations

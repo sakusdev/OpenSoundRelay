@@ -124,7 +124,9 @@ impl eframe::App for OsrDesktopApp {
 
 impl OsrDesktopApp {
     fn drain_events(&mut self) {
-        let Some(rx) = &self.event_rx else { return; };
+        let Some(rx) = &self.event_rx else {
+            return;
+        };
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
             events.push(event);
@@ -177,7 +179,9 @@ impl OsrDesktopApp {
         let initial_gain = self.volume_percent * 10_000;
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
-        thread::spawn(move || run_tone_sender_worker(bind, targets, initial_gain, command_rx, event_tx));
+        thread::spawn(move || {
+            run_tone_sender_worker(bind, targets, initial_gain, command_rx, event_tx)
+        });
         self.command_tx = Some(command_tx);
         self.event_rx = Some(event_rx);
         self.mode = Mode::ToneSender;
@@ -200,7 +204,11 @@ impl OsrDesktopApp {
     }
 }
 
-fn run_receiver_worker(bind: SocketAddr, command_rx: Receiver<WorkerCommand>, event_tx: Sender<WorkerEvent>) {
+fn run_receiver_worker(
+    bind: SocketAddr,
+    command_rx: Receiver<WorkerCommand>,
+    event_tx: Sender<WorkerEvent>,
+) {
     let _ = event_tx.send(WorkerEvent::Status(format!("Binding receiver on {bind}")));
     let mut endpoint = match UdpEndpoint::bind(UdpEndpointConfig {
         bind_addr: bind,
@@ -252,7 +260,9 @@ fn run_receiver_worker(bind: SocketAddr, command_rx: Receiver<WorkerCommand>, ev
                 )));
             }
             Ok(Some(IncomingPacket::Other { from, kind, .. })) => {
-                let _ = event_tx.send(WorkerEvent::Packet(format!("other from={from} kind={kind:?}")));
+                let _ = event_tx.send(WorkerEvent::Packet(format!(
+                    "other from={from} kind={kind:?}"
+                )));
             }
             Ok(None) => {}
             Err(error) => {

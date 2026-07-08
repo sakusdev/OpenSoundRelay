@@ -19,16 +19,16 @@
 - [x] UDP audio packet prototype
 - [x] Parent volume slider
 - [x] Child read-only synced volume display
+- [x] receiver jitter buffer
 - [ ] Android build CI
 - [ ] real-device latency notes
-- [ ] receiver jitter buffer
 
 ## v0.3: High-quality low-latency audio
 
 - [ ] Opus encode/decode
 - [ ] 48kHz stream format
 - [ ] 5ms / 10ms / 20ms frame modes
-- [ ] Jitter buffer
+- [ ] Jitter buffer tuning
 - [ ] latency target modes
 - [ ] packet loss statistics
 

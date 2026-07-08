@@ -11,6 +11,7 @@ name = "osr-desktop"
 path = "src/main.rs"
 
 [dependencies]
+cpal = "0.15"
 eframe = "0.29"
 egui = "0.29"
 osr-core.workspace = true

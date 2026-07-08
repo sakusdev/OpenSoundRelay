@@ -90,9 +90,9 @@ object OsrProtocol {
         buffer.putLong(frameSequence)
         buffer.putInt(sampleRateHz)
         buffer.put(channels.toByte())
-        buffer.put(1) // codec: PCM
-        buffer.put(1) // sample format: S16LE
-        buffer.put(0) // reserved
+        buffer.put(1.toByte()) // codec: PCM
+        buffer.put(1.toByte()) // sample format: S16LE
+        buffer.put(0.toByte()) // reserved
         buffer.putInt(frameDurationUs)
         buffer.putInt(pcmPayload.size)
         buffer.put(pcmPayload)
@@ -133,7 +133,7 @@ object OsrProtocol {
         buffer.putLong(command.epoch)
         buffer.putLong(command.sequence)
         buffer.putInt(command.gainPpm.coerceIn(0, 2_000_000))
-        buffer.put(if (command.muted) 1 else 0)
+        buffer.put((if (command.muted) 1 else 0).toByte())
         buffer.put(ByteArray(7))
         buffer.putLong(command.targetMediaTimeUs)
         return buffer.array()

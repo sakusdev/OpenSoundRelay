@@ -12,13 +12,16 @@
 
 ## v0.2: Android-to-Android PCM prototype
 
-- [ ] Android sender mode
-- [ ] Android receiver mode
-- [ ] AudioRecord PCM capture
-- [ ] AudioTrack or AAudio playback
-- [ ] UDP audio packet prototype
-- [ ] Parent volume slider
-- [ ] Child read-only synced volume display
+- [x] Android sender mode
+- [x] Android receiver mode
+- [x] AudioRecord PCM capture
+- [x] AudioTrack playback
+- [x] UDP audio packet prototype
+- [x] Parent volume slider
+- [x] Child read-only synced volume display
+- [ ] Android build CI
+- [ ] real-device latency notes
+- [ ] receiver jitter buffer
 
 ## v0.3: High-quality low-latency audio
 

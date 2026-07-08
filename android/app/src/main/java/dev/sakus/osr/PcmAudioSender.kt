@@ -2,9 +2,13 @@
 
 package dev.sakus.osr
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.projection.MediaProjection
+import android.os.Build
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -14,8 +18,14 @@ import kotlin.concurrent.thread
 
 class PcmAudioSender(
     private val targets: List<InetSocketAddress>,
+    private val captureSource: CaptureSource,
     private val status: (String) -> Unit,
 ) {
+    sealed class CaptureSource {
+        data object Microphone : CaptureSource()
+        class Playback(val mediaProjection: MediaProjection) : CaptureSource()
+    }
+
     private val running = AtomicBoolean(false)
     private val gainPpm = AtomicInteger(1_000_000)
     private var worker: Thread? = null
@@ -62,19 +72,19 @@ class PcmAudioSender(
         val streamId = 1
         val epoch = 1L
 
-        val recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            audioFormat,
-            recordBufferSize,
-        )
+        val recorder = try {
+            createAudioRecord(sampleRate, channelConfig, audioFormat, recordBufferSize)
+        } catch (error: Throwable) {
+            status("Audio capture setup error: ${error.message}")
+            running.set(false)
+            return
+        }
 
         val socket = DatagramSocket()
 
         try {
             recorder.startRecording()
-            status("Sending PCM to ${targets.size} target(s)")
+            status("Sending ${captureSource.label()} PCM to ${targets.size} target(s)")
 
             while (running.get()) {
                 val read = recorder.read(payload, 0, payload.size)
@@ -115,7 +125,7 @@ class PcmAudioSender(
 
                 statusCounter++
                 if (statusCounter % 100L == 0L || failed > 0) {
-                    status("Fan-out targets=${targets.size} failed=$failed volume=${gainPpm.get() / 10_000}%")
+                    status("Fan-out ${captureSource.label()} targets=${targets.size} failed=$failed volume=${gainPpm.get() / 10_000}%")
                 }
             }
         } catch (error: Throwable) {
@@ -125,7 +135,68 @@ class PcmAudioSender(
             runCatching { recorder.stop() }
             recorder.release()
             socket.close()
+            if (captureSource is CaptureSource.Playback) {
+                runCatching { captureSource.mediaProjection.stop() }
+            }
             status("Sender stopped")
+        }
+    }
+
+    private fun createAudioRecord(
+        sampleRate: Int,
+        channelConfig: Int,
+        audioFormat: Int,
+        recordBufferSize: Int,
+    ): AudioRecord {
+        return when (val source = captureSource) {
+            CaptureSource.Microphone -> AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                recordBufferSize,
+            )
+
+            is CaptureSource.Playback -> createPlaybackAudioRecord(
+                source.mediaProjection,
+                sampleRate,
+                recordBufferSize,
+            )
+        }
+    }
+
+    private fun createPlaybackAudioRecord(
+        mediaProjection: MediaProjection,
+        sampleRate: Int,
+        recordBufferSize: Int,
+    ): AudioRecord {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            error("Device playback capture requires Android 10+")
+        }
+
+        val playbackConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+            .addMatchingUsage(AudioAttributes.USAGE_GAME)
+            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            .build()
+
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(sampleRate)
+            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+            .build()
+
+        return AudioRecord.Builder()
+            .setAudioFormat(format)
+            .setBufferSizeInBytes(recordBufferSize)
+            .setAudioPlaybackCaptureConfig(playbackConfig)
+            .build()
+    }
+
+    private fun CaptureSource.label(): String {
+        return when (this) {
+            CaptureSource.Microphone -> "microphone"
+            is CaptureSource.Playback -> "device playback"
         }
     }
 

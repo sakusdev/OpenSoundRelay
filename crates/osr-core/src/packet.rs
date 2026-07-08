@@ -62,7 +62,7 @@ pub fn decode_packet(input: &[u8]) -> Result<Packet<'_>, PacketDecodeError> {
         return Err(PacketDecodeError::TooShort);
     }
 
-    if input[0..4] != OSR_MAGIC {
+    if &input[0..4] != OSR_MAGIC.as_slice() {
         return Err(PacketDecodeError::BadMagic);
     }
 

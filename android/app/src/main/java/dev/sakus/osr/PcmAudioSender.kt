@@ -7,14 +7,13 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 class PcmAudioSender(
-    private val targetHost: String,
-    private val targetPort: Int,
+    private val targets: List<InetSocketAddress>,
     private val status: (String) -> Unit,
 ) {
     private val running = AtomicBoolean(false)
@@ -26,6 +25,10 @@ class PcmAudioSender(
     }
 
     fun start() {
+        if (targets.isEmpty()) {
+            status("No targets")
+            return
+        }
         if (!running.compareAndSet(false, true)) return
         worker = thread(name = "osr-pcm-sender") {
             runLoop()
@@ -55,6 +58,7 @@ class PcmAudioSender(
         var packetSequence = 1L
         var frameSequence = 1L
         var volumeSequence = 1L
+        var statusCounter = 0L
         val streamId = 1
         val epoch = 1L
 
@@ -67,11 +71,10 @@ class PcmAudioSender(
         )
 
         val socket = DatagramSocket()
-        val address = InetAddress.getByName(targetHost)
 
         try {
             recorder.startRecording()
-            status("Sending PCM to $targetHost:$targetPort")
+            status("Sending PCM to ${targets.size} target(s)")
 
             while (running.get()) {
                 val read = recorder.read(payload, 0, payload.size)
@@ -88,7 +91,6 @@ class PcmAudioSender(
                     pcmPayload = if (read == payload.size) payload else payload.copyOf(read),
                 )
                 val audioPacket = OsrProtocol.encodePacket(OsrProtocol.KIND_AUDIO, packetSequence++, audioFrame)
-                socket.send(DatagramPacket(audioPacket, audioPacket.size, address, targetPort))
 
                 val command = OsrProtocol.VolumeCommand(
                     streamId = streamId,
@@ -100,7 +102,21 @@ class PcmAudioSender(
                 )
                 val volumePayload = OsrProtocol.encodeVolumeCommand(command)
                 val volumePacket = OsrProtocol.encodePacket(OsrProtocol.KIND_VOLUME_COMMAND, packetSequence++, volumePayload)
-                socket.send(DatagramPacket(volumePacket, volumePacket.size, address, targetPort))
+
+                var failed = 0
+                for (target in targets) {
+                    runCatching {
+                        socket.send(DatagramPacket(audioPacket, audioPacket.size, target.address, target.port))
+                        socket.send(DatagramPacket(volumePacket, volumePacket.size, target.address, target.port))
+                    }.onFailure {
+                        failed++
+                    }
+                }
+
+                statusCounter++
+                if (statusCounter % 100L == 0L || failed > 0) {
+                    status("Fan-out targets=${targets.size} failed=$failed volume=${gainPpm.get() / 10_000}%")
+                }
             }
         } catch (error: Throwable) {
             if (running.get()) status("Sender error: ${error.message}")
@@ -110,6 +126,29 @@ class PcmAudioSender(
             recorder.release()
             socket.close()
             status("Sender stopped")
+        }
+    }
+
+    companion object {
+        fun parseTargets(raw: String, defaultPort: Int): List<InetSocketAddress> {
+            return raw
+                .split(',', ';', '\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .mapNotNull { value ->
+                    val host: String
+                    val port: Int
+                    val lastColon = value.lastIndexOf(':')
+                    if (lastColon > 0 && lastColon < value.lastIndex - 1) {
+                        host = value.substring(0, lastColon).trim()
+                        port = value.substring(lastColon + 1).trim().toIntOrNull() ?: return@mapNotNull null
+                    } else {
+                        host = value
+                        port = defaultPort
+                    }
+                    InetSocketAddress(host, port)
+                }
+                .distinctBy { "${it.hostString}:${it.port}" }
         }
     }
 }

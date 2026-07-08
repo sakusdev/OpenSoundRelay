@@ -33,9 +33,48 @@ Header length: 28 bytes.
 | Value | Name | Purpose |
 |---:|---|---|
 | 1 | Hello | peer capability announcement |
-| 2 | Audio | encoded audio frame |
+| 2 | Audio | audio frame |
 | 3 | VolumeCommand | parent-authoritative stream volume |
 | 4 | TimeSync | clock/media timeline synchronization |
+
+## Audio payload
+
+The `Audio` packet payload is an `AudioFrame`.
+
+AudioFrame header length: 36 bytes.
+
+```text
+0..4    stream_id: u32
+4..12   media_time_us: u64
+12..20  frame_sequence: u64
+20..24  sample_rate_hz: u32
+24      channels: u8
+25      codec: u8
+26      sample_format: u8
+27      reserved, must be zero in v1
+28..32  frame_duration_us: u32
+32..36  payload_len: u32
+36..    audio payload bytes
+```
+
+### Codec values
+
+| Value | Name | Purpose |
+|---:|---|---|
+| 1 | PCM | raw PCM prototype frames |
+| 2 | Opus | future high-quality low-latency frames |
+
+### Sample format values
+
+| Value | Name | Purpose |
+|---:|---|---|
+| 1 | S16LE | signed 16-bit little-endian PCM |
+| 2 | F32LE | 32-bit little-endian float PCM |
+| 255 | Encoded | compressed codec payload, for example Opus |
+
+v0.2 uses `codec=1` and `sample_format=1` for Android-to-Android PCM S16LE prototyping.
+
+v0.3 should keep the same `AudioFrame` envelope and switch to `codec=2` and `sample_format=255` for Opus payloads.
 
 ## VolumeCommand payload
 
@@ -56,6 +95,12 @@ Length: 40 bytes.
 A child accepts a new `VolumeCommand` when:
 
 ```text
+candidate.stream_id == current.stream_id
+```
+
+and:
+
+```text
 candidate.epoch > current.epoch
 ```
 
@@ -65,7 +110,7 @@ or:
 candidate.epoch == current.epoch && candidate.sequence > current.sequence
 ```
 
-Otherwise, it must ignore the command as stale.
+Otherwise, it must ignore the command as stale or unrelated to the current stream.
 
 ## Gain math
 
@@ -83,19 +128,3 @@ This integer operation is the normative behavior for exact cross-platform OSR st
 ## Why fixed-point?
 
 Floating-point behavior is usually close across platforms, but OSR wants the volume state and gain operation to be reproducible in Android, iOS, desktop, and Web implementations. Integer fixed-point values avoid unnecessary differences.
-
-## Future audio packet payload
-
-The v1 `Audio` packet is reserved for Opus frames. The planned fields are:
-
-```text
-stream_id: u32
-media_time_us: u64
-sample_rate: u32
-channels: u8
-codec: u8
-frame_duration_us: u16
-encoded_payload: bytes
-```
-
-This will be finalized after the Android prototype proves latency behavior.

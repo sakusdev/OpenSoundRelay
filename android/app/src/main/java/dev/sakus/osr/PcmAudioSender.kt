@@ -100,7 +100,11 @@ class PcmAudioSender(
                     frameDurationUs = 10_000,
                     pcmPayload = if (read == payload.size) payload else payload.copyOf(read),
                 )
-                val audioPacket = OsrProtocol.encodePacket(OsrProtocol.KIND_AUDIO, packetSequence++, audioFrame)
+                val audioPacket = OsrProtocol.encodePacket(
+                    OsrProtocol.KIND_AUDIO,
+                    packetSequence++,
+                    audioFrame,
+                )
 
                 val command = OsrProtocol.VolumeCommand(
                     streamId = streamId,
@@ -111,7 +115,11 @@ class PcmAudioSender(
                     targetMediaTimeUs = 0,
                 )
                 val volumePayload = OsrProtocol.encodeVolumeCommand(command)
-                val volumePacket = OsrProtocol.encodePacket(OsrProtocol.KIND_VOLUME_COMMAND, packetSequence++, volumePayload)
+                val volumePacket = OsrProtocol.encodePacket(
+                    OsrProtocol.KIND_VOLUME_COMMAND,
+                    packetSequence++,
+                    volumePayload,
+                )
 
                 var failed = 0
                 for (target in targets) {
@@ -125,7 +133,10 @@ class PcmAudioSender(
 
                 statusCounter++
                 if (statusCounter % 100L == 0L || failed > 0) {
-                    status("Fan-out ${captureSource.label()} targets=${targets.size} failed=$failed volume=${gainPpm.get() / 10_000}%")
+                    status(
+                        "Fan-out ${captureSource.label()} targets=${targets.size} " +
+                            "failed=$failed volume=${gainPpm.get() / 10_000}%",
+                    )
                 }
             }
         } catch (error: Throwable) {
@@ -135,8 +146,9 @@ class PcmAudioSender(
             runCatching { recorder.stop() }
             recorder.release()
             socket.close()
-            if (captureSource is CaptureSource.Playback) {
-                runCatching { captureSource.mediaProjection.stop() }
+            val playbackSource = captureSource as? CaptureSource.Playback
+            if (playbackSource != null) {
+                runCatching { playbackSource.mediaProjection.stop() }
             }
             status("Sender stopped")
         }

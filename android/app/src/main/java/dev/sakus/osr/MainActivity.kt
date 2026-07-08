@@ -50,23 +50,23 @@ class MainActivity : Activity() {
         val targetHosts = EditText(this).apply {
             hint = "Targets, one per line or comma-separated. Example: 192.168.1.23:40124"
             setText("127.0.0.1:40124")
-            minLines = 2
-            maxLines = 4
-            singleLine(false)
+            setMinLines(2)
+            setMaxLines(4)
+            setSingleLine(false)
         }
         root.addView(targetHosts)
 
         val defaultTargetPort = EditText(this).apply {
             hint = "Default target UDP port when omitted"
             setText("40124")
-            singleLine()
+            setSingleLine(true)
         }
         root.addView(defaultTargetPort)
 
         val bindPort = EditText(this).apply {
             hint = "Receive UDP port"
             setText("40124")
-            singleLine()
+            setSingleLine(true)
         }
         root.addView(bindPort)
 

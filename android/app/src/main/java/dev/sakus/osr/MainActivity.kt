@@ -16,6 +16,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import java.net.InetSocketAddress
 
 class MainActivity : Activity() {
     private var sender: PcmAudioSender? = null
@@ -56,9 +57,9 @@ class MainActivity : Activity() {
         }
 
         startSender(
-            pending.targets,
-            PcmAudioSender.CaptureSource.Playback(mediaProjection),
-            pending.gainPpm,
+            targets = pending.targets,
+            captureSource = PcmAudioSender.CaptureSource.Playback(mediaProjection),
+            gainPpm = pending.gainPpm,
         )
     }
 
@@ -159,9 +160,9 @@ class MainActivity : Activity() {
             requestRecordAudioPermissionIfNeeded()
             val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
             startSender(
-                targets,
-                PcmAudioSender.CaptureSource.Microphone,
-                currentVolumeProgress * 10_000,
+                targets = targets,
+                captureSource = PcmAudioSender.CaptureSource.Microphone,
+                gainPpm = currentVolumeProgress * 10_000,
             )
         }
 
@@ -202,7 +203,7 @@ class MainActivity : Activity() {
     private fun parseTargetsFromUi(
         targetHosts: EditText,
         defaultTargetPort: EditText,
-    ): List<java.net.InetSocketAddress>? {
+    ): List<InetSocketAddress>? {
         val defaultPort = defaultTargetPort.text.toString().toIntOrNull() ?: 40124
         val targets = PcmAudioSender.parseTargets(targetHosts.text.toString(), defaultPort)
         if (targets.isEmpty()) {
@@ -213,12 +214,16 @@ class MainActivity : Activity() {
     }
 
     private fun startSender(
-        targets: List<java.net.InetSocketAddress>,
+        targets: List<InetSocketAddress>,
         captureSource: PcmAudioSender.CaptureSource,
         gainPpm: Int,
     ) {
         sender?.stop()
-        sender = PcmAudioSender(targets, captureSource, ::setStatus).also {
+        sender = PcmAudioSender(
+            targets = targets,
+            captureSource = captureSource,
+            status = ::setStatus,
+        ).also {
             it.setGainPpm(gainPpm)
             it.start()
         }
@@ -237,7 +242,7 @@ class MainActivity : Activity() {
     }
 
     private data class PendingSenderStart(
-        val targets: List<java.net.InetSocketAddress>,
+        val targets: List<InetSocketAddress>,
         val gainPpm: Int,
     )
 

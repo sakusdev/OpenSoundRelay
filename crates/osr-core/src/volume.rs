@@ -92,6 +92,7 @@ impl VolumeState {
 /// Child-side volume state tracker.
 ///
 /// Rules:
+/// - a different non-zero stream id is ignored
 /// - a newer epoch always wins
 /// - inside the same epoch, a higher sequence wins
 /// - stale commands are ignored
@@ -111,6 +112,10 @@ impl VolumeSynchronizer {
     }
 
     pub fn apply_parent_command(&mut self, command: VolumeCommand) -> bool {
+        if self.current.stream_id != 0 && command.stream_id != self.current.stream_id {
+            return false;
+        }
+
         if is_newer(command, self.current) {
             self.current = command;
             true
@@ -155,6 +160,15 @@ mod tests {
         let mut sync = VolumeSynchronizer::new(VolumeState::new(7, 1, 10, UNITY_GAIN_PPM));
         let accepted = sync.apply_parent_command(VolumeState::new(7, 1, 9, 250_000));
         assert!(!accepted);
+        assert_eq!(sync.current().gain_ppm, UNITY_GAIN_PPM);
+    }
+
+    #[test]
+    fn ignores_different_stream_id() {
+        let mut sync = VolumeSynchronizer::new(VolumeState::new(7, 1, 10, UNITY_GAIN_PPM));
+        let accepted = sync.apply_parent_command(VolumeState::new(8, 2, 1, 250_000));
+        assert!(!accepted);
+        assert_eq!(sync.current().stream_id, 7);
         assert_eq!(sync.current().gain_ppm, UNITY_GAIN_PPM);
     }
 

@@ -4,7 +4,6 @@ package dev.sakus.osr
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -71,6 +70,7 @@ class PcmAudioReceiver(
                 targetMediaTimeUs = 0,
             ),
         )
+        val jitterBuffer = PcmJitterBuffer(targetFrames = 3, maxFrames = 16)
 
         val socket = DatagramSocket(bindPort)
         socket.soTimeout = 500
@@ -101,9 +101,12 @@ class PcmAudioReceiver(
                     OsrProtocol.KIND_AUDIO -> {
                         val frame = OsrProtocol.decodeAudioFrame(decoded.payload) ?: continue
                         if (frame.codec != 1 || frame.sampleFormat != 1 || frame.channels != 1) continue
-                        val pcm = frame.payload.copyOf()
-                        sync.applyGainToPcmS16Le(pcm, pcm.size)
-                        track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+
+                        for (readyFrame in jitterBuffer.push(frame)) {
+                            val pcm = readyFrame.payload.copyOf()
+                            sync.applyGainToPcmS16Le(pcm, pcm.size)
+                            track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+                        }
                     }
                 }
             }
@@ -112,6 +115,7 @@ class PcmAudioReceiver(
         } finally {
             running.set(false)
             socket.close()
+            jitterBuffer.clear()
             runCatching { track.stop() }
             track.release()
             status("Receiver stopped")

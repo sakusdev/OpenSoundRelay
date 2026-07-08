@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use osr_core::{
-    decode_packet, encode_packet, PacketKind, VolumeState, VolumeSynchronizer, UNITY_GAIN_PPM,
-};
+use osr_core::{AudioFrameHeader, PacketKind, VolumeState, VolumeSynchronizer, UNITY_GAIN_PPM};
+use osr_net::{IncomingPacket, UdpEndpoint, UdpEndpointConfig};
 use std::env;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() {
     if let Err(error) = run() {
@@ -21,6 +20,7 @@ fn run() -> Result<(), String> {
     match args.get(1).map(String::as_str) {
         Some("host") => run_host(&args[2..]),
         Some("child") => run_child(&args[2..]),
+        Some("tone") => run_tone(&args[2..]),
         _ => Err("missing mode".to_owned()),
     }
 }
@@ -31,12 +31,18 @@ fn run_host(args: &[String]) -> Result<(), String> {
         .parse()
         .map_err(|_| "invalid --target".to_owned())?;
 
-    let volume = parse_flag(args, "--volume")?
-        .unwrap_or_else(|| "1.0".to_owned());
+    let volume = parse_flag(args, "--volume")?.unwrap_or_else(|| "1.0".to_owned());
     let gain_ppm = parse_volume_to_ppm(&volume)?;
+    let bind: SocketAddr = parse_flag(args, "--bind")?
+        .unwrap_or_else(|| "0.0.0.0:0".to_owned())
+        .parse()
+        .map_err(|_| "invalid --bind".to_owned())?;
 
-    let bind = parse_flag(args, "--bind")?.unwrap_or_else(|| "0.0.0.0:0".to_owned());
-    let socket = UdpSocket::bind(&bind).map_err(|err| format!("failed to bind {bind}: {err}"))?;
+    let mut endpoint = UdpEndpoint::bind(UdpEndpointConfig {
+        bind_addr: bind,
+        ..Default::default()
+    })
+    .map_err(|err| format!("failed to bind {bind}: {err}"))?;
 
     let mut sequence = 1u64;
     let epoch = 1u64;
@@ -46,54 +52,109 @@ fn run_host(args: &[String]) -> Result<(), String> {
 
     loop {
         let command = VolumeState::new(stream_id, epoch, sequence, gain_ppm);
-        let payload = command.encode();
-        let packet = encode_packet(PacketKind::VolumeCommand, sequence, 0, &payload);
-        socket
-            .send_to(&packet, target)
-            .map_err(|err| format!("failed to send packet: {err}"))?;
-
+        endpoint
+            .send_volume_command(target, command)
+            .map_err(|err| format!("failed to send volume command: {err}"))?;
         println!("sent volume command seq={sequence} gain_ppm={gain_ppm}");
-        sequence = sequence.wrapping_add(1);
+        sequence = sequence.wrapping_add(1).max(1);
         thread::sleep(Duration::from_millis(500));
     }
 }
 
 fn run_child(args: &[String]) -> Result<(), String> {
-    let bind = parse_flag(args, "--bind")?.unwrap_or_else(|| "0.0.0.0:40124".to_owned());
-    let socket = UdpSocket::bind(&bind).map_err(|err| format!("failed to bind {bind}: {err}"))?;
-    let mut sync = VolumeSynchronizer::new(VolumeState::new(1, 0, 0, UNITY_GAIN_PPM));
-    let mut buf = [0u8; 1500];
+    let bind: SocketAddr = parse_flag(args, "--bind")?
+        .unwrap_or_else(|| "0.0.0.0:40124".to_owned())
+        .parse()
+        .map_err(|_| "invalid --bind".to_owned())?;
 
+    let mut endpoint = UdpEndpoint::bind(UdpEndpointConfig {
+        bind_addr: bind,
+        ..Default::default()
+    })
+    .map_err(|err| format!("failed to bind {bind}: {err}"))?;
+
+    let mut sync = VolumeSynchronizer::new(VolumeState::new(1, 0, 0, UNITY_GAIN_PPM));
     println!("OSR child listening on {bind}");
 
     loop {
-        let (len, from) = socket
-            .recv_from(&mut buf)
-            .map_err(|err| format!("failed to receive packet: {err}"))?;
-        let packet = match decode_packet(&buf[..len]) {
-            Ok(packet) => packet,
-            Err(error) => {
-                eprintln!("ignored malformed packet from {from}: {error:?}");
-                continue;
-            }
+        let Some(packet) = endpoint
+            .recv()
+            .map_err(|err| format!("failed to receive packet: {err}"))?
+        else {
+            continue;
         };
 
-        if packet.header.kind != PacketKind::VolumeCommand {
-            eprintln!("ignored non-volume packet from {from}: {:?}", packet.header.kind);
-            continue;
+        match packet {
+            IncomingPacket::VolumeCommand { from, command, .. } => {
+                let accepted = sync.apply_parent_command(command);
+                let current = sync.current();
+                println!(
+                    "volume from={from} accepted={accepted} stream={} epoch={} seq={} gain_ppm={} muted={}",
+                    current.stream_id, current.epoch, current.sequence, current.gain_ppm, current.muted
+                );
+            }
+            IncomingPacket::Audio { from, frame, .. } => {
+                println!(
+                    "audio from={from} frame_seq={} payload={} codec={:?}",
+                    frame.header.frame_sequence,
+                    frame.payload.len(),
+                    frame.header.codec
+                );
+            }
+            IncomingPacket::Other { from, kind, .. } => {
+                eprintln!("ignored packet from={from} kind={kind:?}");
+            }
+        }
+    }
+}
+
+fn run_tone(args: &[String]) -> Result<(), String> {
+    let target: SocketAddr = parse_flag(args, "--target")?
+        .ok_or_else(|| "missing --target".to_owned())?
+        .parse()
+        .map_err(|_| "invalid --target".to_owned())?;
+    let bind: SocketAddr = parse_flag(args, "--bind")?
+        .unwrap_or_else(|| "0.0.0.0:0".to_owned())
+        .parse()
+        .map_err(|_| "invalid --bind".to_owned())?;
+
+    let mut endpoint = UdpEndpoint::bind(UdpEndpointConfig {
+        bind_addr: bind,
+        ..Default::default()
+    })
+    .map_err(|err| format!("failed to bind {bind}: {err}"))?;
+
+    let sample_rate = 48_000u32;
+    let frame_duration_us = 10_000u32;
+    let samples_per_frame = (sample_rate / 100) as usize;
+    let mut frame_sequence = 1u64;
+    let stream_id = 1u32;
+    let started = Instant::now();
+
+    println!("OSR tone sender target={target}");
+    loop {
+        let mut payload = Vec::with_capacity(samples_per_frame * 2);
+        for i in 0..samples_per_frame {
+            let absolute_sample = ((frame_sequence - 1) as usize * samples_per_frame) + i;
+            let phase = absolute_sample as f32 * 440.0 * std::f32::consts::TAU / sample_rate as f32;
+            let sample = (phase.sin() * i16::MAX as f32 * 0.15) as i16;
+            payload.extend_from_slice(&sample.to_le_bytes());
         }
 
-        let Some(command) = VolumeState::decode(packet.payload) else {
-            eprintln!("ignored bad volume command from {from}");
-            continue;
-        };
-
-        let accepted = sync.apply_parent_command(command);
-        let current = sync.current();
-        println!(
-            "from={from} accepted={accepted} stream={} epoch={} seq={} gain_ppm={} muted={}",
-            current.stream_id, current.epoch, current.sequence, current.gain_ppm, current.muted
+        let header = AudioFrameHeader::pcm_s16le(
+            stream_id,
+            started.elapsed().as_micros() as u64,
+            frame_sequence,
+            sample_rate,
+            1,
+            frame_duration_us,
+            payload.len() as u32,
         );
+        endpoint
+            .send_audio(target, header, &payload)
+            .map_err(|err| format!("failed to send tone: {err}"))?;
+        frame_sequence = frame_sequence.wrapping_add(1).max(1);
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -123,6 +184,6 @@ fn parse_volume_to_ppm(input: &str) -> Result<u32, String> {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  osr-cli child --bind 0.0.0.0:40124\n  osr-cli host --target 127.0.0.1:40124 --volume 0.5"
+        "usage:\n  osr-cli child --bind 0.0.0.0:40124\n  osr-cli host --target 127.0.0.1:40124 --volume 0.5\n  osr-cli tone --target 127.0.0.1:40124"
     );
 }

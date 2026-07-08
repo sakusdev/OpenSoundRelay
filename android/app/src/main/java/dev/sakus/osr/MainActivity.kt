@@ -42,24 +42,26 @@ class MainActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "OpenSoundRelay v0.2 PCM Prototype"
+            text = "OpenSoundRelay v0.2 Multi-device PCM Prototype"
             textSize = 20f
         }
         root.addView(title)
 
-        val targetHost = EditText(this).apply {
-            hint = "Target host, e.g. 192.168.1.23"
-            setText("127.0.0.1")
-            singleLine()
+        val targetHosts = EditText(this).apply {
+            hint = "Targets, one per line or comma-separated. Example: 192.168.1.23:40124"
+            setText("127.0.0.1:40124")
+            minLines = 2
+            maxLines = 4
+            singleLine(false)
         }
-        root.addView(targetHost)
+        root.addView(targetHosts)
 
-        val targetPort = EditText(this).apply {
-            hint = "Target UDP port"
+        val defaultTargetPort = EditText(this).apply {
+            hint = "Default target UDP port when omitted"
             setText("40124")
             singleLine()
         }
-        root.addView(targetPort)
+        root.addView(defaultTargetPort)
 
         val bindPort = EditText(this).apply {
             hint = "Receive UDP port"
@@ -80,7 +82,7 @@ class MainActivity : Activity() {
         root.addView(volume)
 
         val startSender = Button(this).apply {
-            text = "Start Sender"
+            text = "Start Sender Fan-out"
         }
         root.addView(startSender)
 
@@ -118,10 +120,14 @@ class MainActivity : Activity() {
 
         startSender.setOnClickListener {
             requestRecordAudioPermissionIfNeeded()
-            val host = targetHost.text.toString().trim()
-            val port = targetPort.text.toString().toIntOrNull() ?: 40124
+            val defaultPort = defaultTargetPort.text.toString().toIntOrNull() ?: 40124
+            val targets = PcmAudioSender.parseTargets(targetHosts.text.toString(), defaultPort)
+            if (targets.isEmpty()) {
+                setStatus("No valid targets")
+                return@setOnClickListener
+            }
             sender?.stop()
-            sender = PcmAudioSender(host, port, ::setStatus).also {
+            sender = PcmAudioSender(targets, ::setStatus).also {
                 it.setGainPpm(volume.progress * 10_000)
                 it.start()
             }

@@ -12,19 +12,33 @@ OSR is now a functional prototype with:
 - shared UDP transport crate
 - CLI tools
 - Android-to-Android PCM sender/receiver app
-- desktop GUI for Linux/Windows/macOS protocol testing
+- desktop GUI for Linux/Windows/macOS protocol testing and PCM playback
+- multi-device UDP unicast fan-out
 - parent-authoritative stream volume synchronization
 - cross-platform GitHub Actions build workflows
 
-It is still pre-release software. The next major quality step is Opus audio and real-device latency tuning.
+It is still pre-release software. The next major quality step is Opus audio, LAN discovery, and real-device latency tuning.
 
 ## Key idea
 
 OSR separates the project into three layers:
 
 1. **OSR Core**: portable protocol, packets, volume synchronization, timing, and audio-frame rules.
-2. **OSR Net**: cross-platform UDP transport and packet routing.
+2. **OSR Net**: cross-platform UDP transport, target lists, fan-out, and packet routing.
 3. **Platform Apps**: Android, iOS, desktop, and Web implementations that connect to the same protocol.
+
+## Multi-device fan-out
+
+The parent can send the same audio and volume commands to multiple child devices by UDP unicast fan-out.
+
+```text
+Parent sender
+  -> child A 192.168.1.10:40124
+  -> child B 192.168.1.11:40124
+  -> child C 192.168.1.12:40124
+```
+
+See [docs/multi-device.md](./docs/multi-device.md).
 
 ## Volume synchronization model
 
@@ -48,6 +62,7 @@ parent OS master volume -> every child OS master volume
 
 - Android-to-Android first
 - Cross-platform protocol from day one
+- Multi-device output by unicast fan-out
 - High-quality Opus audio target
 - Low-latency UDP/QUIC-friendly packet design
 - Parent-authoritative volume synchronization
@@ -68,7 +83,7 @@ parent OS master volume -> every child OS master volume
 ```text
 android/app/         Android PCM prototype app
 crates/osr-core/     Portable protocol and volume sync core
-crates/osr-net/      Cross-platform UDP transport
+crates/osr-net/      Cross-platform UDP transport and fan-out
 crates/osr-cli/      CLI receiver, volume sender, and tone sender
 crates/osr-desktop/  Cross-platform desktop GUI
 docs/                Architecture, protocol, networking, and build docs
@@ -76,13 +91,13 @@ docs/                Architecture, protocol, networking, and build docs
 
 ## Try the Android PCM prototype
 
-The Android app currently supports manual Android-to-Android testing over Wi-Fi:
+The Android app currently supports manual Android-to-Android testing over Wi-Fi, including multiple child receivers:
 
-1. Install the app on two Android devices.
-2. Start receiver mode on one device.
-3. Enter that receiver IP address on the sender device.
-4. Start sender mode.
-5. Move the parent volume slider and confirm that the receiver follows it.
+1. Install the app on two or more Android devices.
+2. Start receiver mode on each child device.
+3. Enter each child address on the sender device, one per line or comma-separated.
+4. Start sender fan-out mode.
+5. Move the parent volume slider and confirm that all receivers follow it.
 
 See [docs/android-prototype.md](./docs/android-prototype.md).
 
@@ -92,7 +107,7 @@ See [docs/android-prototype.md](./docs/android-prototype.md).
 cargo run -p osr-desktop
 ```
 
-The GUI can run as a UDP receiver or a tone sender for protocol testing.
+The GUI can run as a UDP receiver with PCM playback or a multi-target tone sender.
 
 See [docs/desktop-gui.md](./docs/desktop-gui.md).
 
@@ -104,16 +119,16 @@ Receiver:
 cargo run -p osr-cli -- child --bind 0.0.0.0:40124
 ```
 
-Tone sender:
+Tone sender to multiple targets:
 
 ```bash
-cargo run -p osr-cli -- tone --target 127.0.0.1:40124
+cargo run -p osr-cli -- tone --target 127.0.0.1:40124,127.0.0.1:40125
 ```
 
-Volume sender:
+Volume sender to multiple targets:
 
 ```bash
-cargo run -p osr-cli -- host --target 127.0.0.1:40124 --volume 0.35
+cargo run -p osr-cli -- host --target 127.0.0.1:40124 --target 127.0.0.1:40125 --volume 0.35
 ```
 
 ## Build

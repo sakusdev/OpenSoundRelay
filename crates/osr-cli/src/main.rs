@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use osr_core::{AudioFrameHeader, PacketKind, VolumeState, VolumeSynchronizer, UNITY_GAIN_PPM};
+use osr_core::{AudioFrameHeader, VolumeState, VolumeSynchronizer, UNITY_GAIN_PPM};
 use osr_net::{IncomingPacket, TargetList, UdpEndpoint, UdpEndpointConfig};
 use std::env;
 use std::net::SocketAddr;
@@ -53,7 +53,10 @@ fn run_host(args: &[String]) -> Result<(), String> {
         let command = VolumeState::new(stream_id, epoch, sequence, gain_ppm);
         let report = endpoint.send_volume_command_to_targets(&targets, command);
         if report.all_sent() {
-            println!("sent volume seq={sequence} gain_ppm={gain_ppm} targets={}", report.sent);
+            println!(
+                "sent volume seq={sequence} gain_ppm={gain_ppm} targets={}",
+                report.sent
+            );
         } else {
             eprintln!(
                 "sent volume seq={sequence} gain_ppm={gain_ppm} ok={} failed={:?}",
@@ -94,7 +97,11 @@ fn run_child(args: &[String]) -> Result<(), String> {
                 let current = sync.current();
                 println!(
                     "volume from={from} accepted={accepted} stream={} epoch={} seq={} gain_ppm={} muted={}",
-                    current.stream_id, current.epoch, current.sequence, current.gain_ppm, current.muted
+                    current.stream_id,
+                    current.epoch,
+                    current.sequence,
+                    current.gain_ppm,
+                    current.muted
                 );
             }
             IncomingPacket::Audio { from, frame, .. } => {

@@ -5,7 +5,7 @@ mod audio_output;
 use audio_output::PcmAudioOutput;
 use eframe::egui;
 use osr_core::{AudioCodec, AudioFrameHeader, SampleFormat, VolumeState};
-use osr_net::{IncomingPacket, UdpEndpoint, UdpEndpointConfig};
+use osr_net::{IncomingPacket, TargetList, UdpEndpoint, UdpEndpointConfig};
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -56,7 +56,7 @@ impl Default for OsrDesktopApp {
         Self {
             mode: Mode::Idle,
             bind_addr: "0.0.0.0:40124".to_owned(),
-            target_addr: "127.0.0.1:40124".to_owned(),
+            target_addr: "127.0.0.1:40124\n127.0.0.1:40125".to_owned(),
             volume_percent: 100,
             status: "Idle".to_owned(),
             log: Vec::new(),
@@ -72,17 +72,19 @@ impl eframe::App for OsrDesktopApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("OpenSoundRelay Desktop");
-            ui.label("Cross-platform UDP GUI for OSR audio, volume sync, and PCM playback.");
+            ui.label("Cross-platform UDP GUI for OSR audio, volume sync, PCM playback, and multi-device fan-out.");
             ui.separator();
 
             ui.horizontal(|ui| {
                 ui.label("Bind:");
                 ui.text_edit_singleline(&mut self.bind_addr);
             });
-            ui.horizontal(|ui| {
-                ui.label("Target:");
-                ui.text_edit_singleline(&mut self.target_addr);
-            });
+            ui.label("Targets, one per line or comma-separated:");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.target_addr)
+                    .desired_rows(3)
+                    .hint_text("192.168.1.10:40124\n192.168.1.11:40124"),
+            );
 
             let old_volume = self.volume_percent;
             ui.add(egui::Slider::new(&mut self.volume_percent, 0..=200).text("Parent volume %"));
@@ -96,7 +98,7 @@ impl eframe::App for OsrDesktopApp {
                 if ui.button("Start Receiver + Playback").clicked() {
                     self.start_receiver();
                 }
-                if ui.button("Start Tone Sender").clicked() {
+                if ui.button("Start Tone Sender Fan-out").clicked() {
                     self.start_tone_sender();
                 }
                 if ui.button("Stop").clicked() {
@@ -164,10 +166,10 @@ impl OsrDesktopApp {
                 return;
             }
         };
-        let target = match self.target_addr.parse::<SocketAddr>() {
+        let targets = match TargetList::parse(&self.target_addr) {
             Ok(value) => value,
-            Err(_) => {
-                self.status = "Invalid target address".to_owned();
+            Err(error) => {
+                self.status = format!("Invalid targets: {error:?}");
                 return;
             }
         };
@@ -175,7 +177,7 @@ impl OsrDesktopApp {
         let initial_gain = self.volume_percent * 10_000;
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
-        thread::spawn(move || run_tone_sender_worker(bind, target, initial_gain, command_rx, event_tx));
+        thread::spawn(move || run_tone_sender_worker(bind, targets, initial_gain, command_rx, event_tx));
         self.command_tx = Some(command_tx);
         self.event_rx = Some(event_rx);
         self.mode = Mode::ToneSender;
@@ -263,7 +265,7 @@ fn run_receiver_worker(bind: SocketAddr, command_rx: Receiver<WorkerCommand>, ev
 
 fn run_tone_sender_worker(
     bind: SocketAddr,
-    target: SocketAddr,
+    targets: TargetList,
     initial_gain_ppm: u32,
     command_rx: Receiver<WorkerCommand>,
     event_tx: Sender<WorkerEvent>,
@@ -286,7 +288,10 @@ fn run_tone_sender_worker(
     let stream_id = 1u32;
     let sample_rate = 48_000u32;
     let samples_per_frame = (sample_rate / 100) as usize;
-    let _ = event_tx.send(WorkerEvent::Status(format!("Tone sender -> {target}")));
+    let _ = event_tx.send(WorkerEvent::Status(format!(
+        "Tone sender fan-out -> {} target(s)",
+        targets.len()
+    )));
 
     loop {
         while let Ok(command) = command_rx.try_recv() {
@@ -300,7 +305,7 @@ fn run_tone_sender_worker(
         }
 
         let volume = VolumeState::new(stream_id, 1, volume_sequence, gain_ppm);
-        let _ = endpoint.send_volume_command(target, volume);
+        let volume_report = endpoint.send_volume_command_to_targets(&targets, volume);
         volume_sequence = volume_sequence.wrapping_add(1).max(1);
 
         let mut payload = Vec::with_capacity(samples_per_frame * 2);
@@ -320,19 +325,18 @@ fn run_tone_sender_worker(
             10_000,
             payload.len() as u32,
         );
-        match endpoint.send_audio(target, header, &payload) {
-            Ok(_) => {
-                if frame_sequence % 100 == 0 {
-                    let _ = event_tx.send(WorkerEvent::Packet(format!(
-                        "sent tone seq={} gain={}ppm",
-                        frame_sequence, gain_ppm
-                    )));
-                }
-            }
-            Err(error) => {
-                let _ = event_tx.send(WorkerEvent::Error(format!("send failed: {error}")));
-                return;
-            }
+        let audio_report = endpoint.send_audio_to_targets(&targets, header, &payload);
+        if frame_sequence % 100 == 0 || !audio_report.all_sent() || !volume_report.all_sent() {
+            let _ = event_tx.send(WorkerEvent::Packet(format!(
+                "fanout seq={} audio={}/{} volume={}/{} failed_audio={:?} failed_volume={:?}",
+                frame_sequence,
+                audio_report.sent,
+                audio_report.attempted,
+                volume_report.sent,
+                volume_report.attempted,
+                audio_report.failed,
+                volume_report.failed
+            )));
         }
         frame_sequence = frame_sequence.wrapping_add(1).max(1);
         thread::sleep(Duration::from_millis(10));

@@ -353,10 +353,8 @@ mod tests {
 
     #[test]
     fn parses_multiple_targets() {
-        let targets = TargetList::parse(
-            "127.0.0.1:40124, 127.0.0.1:40125\n127.0.0.1:40126",
-        )
-        .unwrap();
+        let targets =
+            TargetList::parse("127.0.0.1:40124, 127.0.0.1:40125\n127.0.0.1:40126").unwrap();
         assert_eq!(targets.len(), 3);
     }
 

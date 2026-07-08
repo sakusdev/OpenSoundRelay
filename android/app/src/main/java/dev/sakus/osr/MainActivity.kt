@@ -4,7 +4,11 @@ package dev.sakus.osr
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
 import android.widget.Button
@@ -18,6 +22,8 @@ class MainActivity : Activity() {
     private var receiver: PcmAudioReceiver? = null
     private lateinit var statusView: TextView
     private lateinit var volumeView: TextView
+    private var pendingPlaybackStart: PendingSenderStart? = null
+    private var currentVolumeProgress: Int = 100
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +35,31 @@ class MainActivity : Activity() {
         sender?.stop()
         receiver?.stop()
         super.onDestroy()
+    }
+
+    @Deprecated("MediaProjection consent is kept simple for this prototype.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_MEDIA_PROJECTION) return
+
+        val pending = pendingPlaybackStart.also { pendingPlaybackStart = null }
+        if (resultCode != RESULT_OK || data == null || pending == null) {
+            setStatus("Device playback capture permission denied")
+            return
+        }
+
+        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+        if (mediaProjection == null) {
+            setStatus("Failed to create MediaProjection")
+            return
+        }
+
+        startSender(
+            pending.targets,
+            PcmAudioSender.CaptureSource.Playback(mediaProjection),
+            pending.gainPpm,
+        )
     }
 
     private fun createContentView(): LinearLayout {
@@ -81,10 +112,15 @@ class MainActivity : Activity() {
         }
         root.addView(volume)
 
-        val startSender = Button(this).apply {
-            text = "Start Sender Fan-out"
+        val startMicSender = Button(this).apply {
+            text = "Start Mic Sender Fan-out"
         }
-        root.addView(startSender)
+        root.addView(startMicSender)
+
+        val startPlaybackSender = Button(this).apply {
+            text = "Start Device Audio Sender Fan-out"
+        }
+        root.addView(startPlaybackSender)
 
         val stopSender = Button(this).apply {
             text = "Stop Sender"
@@ -109,6 +145,7 @@ class MainActivity : Activity() {
 
         volume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                currentVolumeProgress = progress
                 val gain = progress * 10_000
                 volumeView.text = "Parent volume: $progress%"
                 sender?.setGainPpm(gain)
@@ -118,19 +155,29 @@ class MainActivity : Activity() {
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
 
-        startSender.setOnClickListener {
+        startMicSender.setOnClickListener {
             requestRecordAudioPermissionIfNeeded()
-            val defaultPort = defaultTargetPort.text.toString().toIntOrNull() ?: 40124
-            val targets = PcmAudioSender.parseTargets(targetHosts.text.toString(), defaultPort)
-            if (targets.isEmpty()) {
-                setStatus("No valid targets")
+            val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
+            startSender(
+                targets,
+                PcmAudioSender.CaptureSource.Microphone,
+                currentVolumeProgress * 10_000,
+            )
+        }
+
+        startPlaybackSender.setOnClickListener {
+            requestRecordAudioPermissionIfNeeded()
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                setStatus("Device playback capture requires Android 10+")
                 return@setOnClickListener
             }
-            sender?.stop()
-            sender = PcmAudioSender(targets, ::setStatus).also {
-                it.setGainPpm(volume.progress * 10_000)
-                it.start()
-            }
+            val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
+            pendingPlaybackStart = PendingSenderStart(targets, currentVolumeProgress * 10_000)
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            startActivityForResult(
+                projectionManager.createScreenCaptureIntent(),
+                REQUEST_MEDIA_PROJECTION,
+            )
         }
 
         stopSender.setOnClickListener {
@@ -152,6 +199,31 @@ class MainActivity : Activity() {
         return root
     }
 
+    private fun parseTargetsFromUi(
+        targetHosts: EditText,
+        defaultTargetPort: EditText,
+    ): List<java.net.InetSocketAddress>? {
+        val defaultPort = defaultTargetPort.text.toString().toIntOrNull() ?: 40124
+        val targets = PcmAudioSender.parseTargets(targetHosts.text.toString(), defaultPort)
+        if (targets.isEmpty()) {
+            setStatus("No valid targets")
+            return null
+        }
+        return targets
+    }
+
+    private fun startSender(
+        targets: List<java.net.InetSocketAddress>,
+        captureSource: PcmAudioSender.CaptureSource,
+        gainPpm: Int,
+    ) {
+        sender?.stop()
+        sender = PcmAudioSender(targets, captureSource, ::setStatus).also {
+            it.setGainPpm(gainPpm)
+            it.start()
+        }
+    }
+
     private fun setStatus(message: String) {
         runOnUiThread {
             statusView.text = message
@@ -162,5 +234,14 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1001)
         }
+    }
+
+    private data class PendingSenderStart(
+        val targets: List<java.net.InetSocketAddress>,
+        val gainPpm: Int,
+    )
+
+    companion object {
+        private const val REQUEST_MEDIA_PROJECTION = 2001
     }
 }

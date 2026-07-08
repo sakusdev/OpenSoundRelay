@@ -38,16 +38,25 @@ Run CLI receiver:
 cargo run -p osr-cli -- child --bind 0.0.0.0:40124
 ```
 
-Run CLI tone sender:
+Run CLI tone sender to one target:
 
 ```bash
 cargo run -p osr-cli -- tone --target 127.0.0.1:40124
 ```
 
-Run CLI volume sender:
+Run CLI tone sender to multiple targets:
 
 ```bash
-cargo run -p osr-cli -- host --target 127.0.0.1:40124 --volume 0.5
+cargo run -p osr-cli -- tone --target 127.0.0.1:40124,127.0.0.1:40125
+```
+
+Run CLI volume sender to multiple targets:
+
+```bash
+cargo run -p osr-cli -- host \
+  --target 127.0.0.1:40124 \
+  --target 127.0.0.1:40125 \
+  --volume 0.5
 ```
 
 ## Android

@@ -22,3 +22,9 @@ jobs:
           gradle-version: 8.10.2
       - name: Build debug APK
         run: gradle :android:app:assembleDebug
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: osr-android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

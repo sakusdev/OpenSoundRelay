@@ -1,0 +1,59 @@
+name: Release Builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  rust-desktop:
+    name: Desktop ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: osr-desktop-linux
+            binary: target/release/osr-desktop
+          - os: windows-latest
+            artifact: osr-desktop-windows
+            binary: target/release/osr-desktop.exe
+          - os: macos-latest
+            artifact: osr-desktop-macos
+            binary: target/release/osr-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev
+      - name: Build desktop GUI
+        run: cargo build -p osr-desktop --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Build debug APK
+        run: gradle :android:app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: osr-android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk

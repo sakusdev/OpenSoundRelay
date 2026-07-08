@@ -11,4 +11,5 @@ name = "osr-cli"
 path = "src/main.rs"
 
 [dependencies]
-osr-core = { path = "../osr-core" }
+osr-core.workspace = true
+osr-net.workspace = true

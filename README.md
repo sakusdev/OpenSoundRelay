@@ -11,13 +11,16 @@ OSR separates the project into two layers:
 1. **OSR Core**: portable protocol, packets, volume synchronization, timing, and audio-frame rules.
 2. **Platform Apps**: Android, iOS, desktop, and Web implementations that connect to the same protocol.
 
-This repository currently contains the first cross-platform core pieces:
+This repository currently contains:
 
 - MPL-2.0 license setup
 - Rust workspace
 - `osr-core` protocol library
+- OSR v1 packet header
+- OSR `AudioFrame` envelope
 - fixed-point parent/child volume synchronization
 - CLI demo for volume sync packets
+- Android-to-Android PCM prototype app
 - protocol and architecture docs
 
 ## Volume synchronization model
@@ -60,12 +63,25 @@ parent OS master volume -> every child OS master volume
 ## Repository layout
 
 ```text
-crates/osr-core/   Portable protocol and volume sync core
-crates/osr-cli/    Small CLI demo for cross-platform volume sync packets
-docs/              Architecture and protocol specs
+android/app/        Android PCM prototype app
+crates/osr-core/    Portable protocol and volume sync core
+crates/osr-cli/     Small CLI demo for cross-platform volume sync packets
+docs/               Architecture and protocol specs
 ```
 
-## Try the volume sync demo
+## Try the Android PCM prototype
+
+The Android app currently supports manual Android-to-Android testing over Wi-Fi:
+
+1. Install the app on two Android devices.
+2. Start receiver mode on one device.
+3. Enter that receiver IP address on the sender device.
+4. Start sender mode.
+5. Move the parent volume slider and confirm that the receiver follows it.
+
+See [docs/android-prototype.md](./docs/android-prototype.md).
+
+## Try the volume sync CLI demo
 
 Terminal 1:
 

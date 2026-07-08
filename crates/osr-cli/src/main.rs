@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use osr_core::{AudioFrameHeader, PacketKind, VolumeState, VolumeSynchronizer, UNITY_GAIN_PPM};
-use osr_net::{IncomingPacket, UdpEndpoint, UdpEndpointConfig};
+use osr_net::{IncomingPacket, TargetList, UdpEndpoint, UdpEndpointConfig};
 use std::env;
 use std::net::SocketAddr;
 use std::thread;
@@ -26,11 +26,7 @@ fn run() -> Result<(), String> {
 }
 
 fn run_host(args: &[String]) -> Result<(), String> {
-    let target: SocketAddr = parse_flag(args, "--target")?
-        .ok_or_else(|| "missing --target".to_owned())?
-        .parse()
-        .map_err(|_| "invalid --target".to_owned())?;
-
+    let targets = parse_targets(args)?;
     let volume = parse_flag(args, "--volume")?.unwrap_or_else(|| "1.0".to_owned());
     let gain_ppm = parse_volume_to_ppm(&volume)?;
     let bind: SocketAddr = parse_flag(args, "--bind")?
@@ -48,14 +44,22 @@ fn run_host(args: &[String]) -> Result<(), String> {
     let epoch = 1u64;
     let stream_id = 1u32;
 
-    println!("OSR host sending volume={gain_ppm}ppm to {target}");
+    println!(
+        "OSR host sending volume={gain_ppm}ppm to {} target(s)",
+        targets.len()
+    );
 
     loop {
         let command = VolumeState::new(stream_id, epoch, sequence, gain_ppm);
-        endpoint
-            .send_volume_command(target, command)
-            .map_err(|err| format!("failed to send volume command: {err}"))?;
-        println!("sent volume command seq={sequence} gain_ppm={gain_ppm}");
+        let report = endpoint.send_volume_command_to_targets(&targets, command);
+        if report.all_sent() {
+            println!("sent volume seq={sequence} gain_ppm={gain_ppm} targets={}", report.sent);
+        } else {
+            eprintln!(
+                "sent volume seq={sequence} gain_ppm={gain_ppm} ok={} failed={:?}",
+                report.sent, report.failed
+            );
+        }
         sequence = sequence.wrapping_add(1).max(1);
         thread::sleep(Duration::from_millis(500));
     }
@@ -109,10 +113,7 @@ fn run_child(args: &[String]) -> Result<(), String> {
 }
 
 fn run_tone(args: &[String]) -> Result<(), String> {
-    let target: SocketAddr = parse_flag(args, "--target")?
-        .ok_or_else(|| "missing --target".to_owned())?
-        .parse()
-        .map_err(|_| "invalid --target".to_owned())?;
+    let targets = parse_targets(args)?;
     let bind: SocketAddr = parse_flag(args, "--bind")?
         .unwrap_or_else(|| "0.0.0.0:0".to_owned())
         .parse()
@@ -131,7 +132,7 @@ fn run_tone(args: &[String]) -> Result<(), String> {
     let stream_id = 1u32;
     let started = Instant::now();
 
-    println!("OSR tone sender target={target}");
+    println!("OSR tone sender targets={}", targets.len());
     loop {
         let mut payload = Vec::with_capacity(samples_per_frame * 2);
         for i in 0..samples_per_frame {
@@ -150,26 +151,43 @@ fn run_tone(args: &[String]) -> Result<(), String> {
             frame_duration_us,
             payload.len() as u32,
         );
-        endpoint
-            .send_audio(target, header, &payload)
-            .map_err(|err| format!("failed to send tone: {err}"))?;
+        let report = endpoint.send_audio_to_targets(&targets, header, &payload);
+        if !report.all_sent() {
+            eprintln!(
+                "tone frame={} ok={} failed={:?}",
+                frame_sequence, report.sent, report.failed
+            );
+        }
         frame_sequence = frame_sequence.wrapping_add(1).max(1);
         thread::sleep(Duration::from_millis(10));
     }
 }
 
+fn parse_targets(args: &[String]) -> Result<TargetList, String> {
+    let values = parse_flags(args, "--target")?;
+    if values.is_empty() {
+        return Err("missing --target".to_owned());
+    }
+    TargetList::parse(&values.join(",")).map_err(|error| format!("invalid targets: {error:?}"))
+}
+
 fn parse_flag(args: &[String], name: &str) -> Result<Option<String>, String> {
+    Ok(parse_flags(args, name)?.into_iter().next())
+}
+
+fn parse_flags(args: &[String], name: &str) -> Result<Vec<String>, String> {
+    let mut values = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == name {
-            return iter
-                .next()
-                .cloned()
-                .map(Some)
-                .ok_or_else(|| format!("missing value for {name}"));
+            values.push(
+                iter.next()
+                    .cloned()
+                    .ok_or_else(|| format!("missing value for {name}"))?,
+            );
         }
     }
-    Ok(None)
+    Ok(values)
 }
 
 fn parse_volume_to_ppm(input: &str) -> Result<u32, String> {
@@ -184,6 +202,6 @@ fn parse_volume_to_ppm(input: &str) -> Result<u32, String> {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  osr-cli child --bind 0.0.0.0:40124\n  osr-cli host --target 127.0.0.1:40124 --volume 0.5\n  osr-cli tone --target 127.0.0.1:40124"
+        "usage:\n  osr-cli child --bind 0.0.0.0:40124\n  osr-cli host --target 127.0.0.1:40124 --target 127.0.0.1:40125 --volume 0.5\n  osr-cli tone --target 127.0.0.1:40124,127.0.0.1:40125"
     );
 }

@@ -73,7 +73,7 @@ impl TargetList {
 
     pub fn parse(input: &str) -> Result<Self, TargetParseError> {
         let mut list = Self::new();
-        for raw in input.split(|value: char| value == ',' || value == '\n' || value == ';') {
+        for raw in input.split([',', '\n', ';']) {
             let value = raw.trim();
             if value.is_empty() {
                 continue;
@@ -90,7 +90,11 @@ impl TargetList {
     }
 
     pub fn add(&mut self, target: PeerTarget) {
-        if self.targets.iter().any(|existing| existing.addr == target.addr) {
+        if self
+            .targets
+            .iter()
+            .any(|existing| existing.addr == target.addr)
+        {
             return;
         }
         self.targets.push(target);
@@ -327,7 +331,9 @@ impl StreamStats {
         match packet {
             IncomingPacket::Audio { frame, .. } => {
                 self.received_audio_frames += 1;
-                if self.last_audio_sequence != 0 && frame.header.frame_sequence <= self.last_audio_sequence {
+                if self.last_audio_sequence != 0
+                    && frame.header.frame_sequence <= self.last_audio_sequence
+                {
                     self.dropped_audio_frames += 1;
                 } else {
                     self.last_audio_sequence = frame.header.frame_sequence;
@@ -347,7 +353,10 @@ mod tests {
 
     #[test]
     fn parses_multiple_targets() {
-        let targets = TargetList::parse("127.0.0.1:40124, 127.0.0.1:40125\n127.0.0.1:40126").unwrap();
+        let targets = TargetList::parse(
+            "127.0.0.1:40124, 127.0.0.1:40125\n127.0.0.1:40126",
+        )
+        .unwrap();
         assert_eq!(targets.len(), 3);
     }
 

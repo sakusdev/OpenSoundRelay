@@ -1,0 +1,11 @@
+[package]
+name = "osr-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable OpenSoundRelay protocol and synchronization core"
+
+[lib]
+name = "osr_core"
+path = "src/lib.rs"

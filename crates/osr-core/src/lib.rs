@@ -16,7 +16,7 @@ pub use audio::{
     AudioFrameHeader, SampleFormat,
 };
 pub use packet::{decode_packet, encode_packet, Packet, PacketDecodeError, PacketHeader};
-pub use protocol::{PacketKind, PROTOCOL_VERSION, OSR_MAGIC};
+pub use protocol::{PacketKind, OSR_MAGIC, PROTOCOL_VERSION};
 pub use volume::{
     apply_gain_i16, GainPpm, VolumeCommand, VolumeState, VolumeSynchronizer, MAX_GAIN_PPM,
     UNITY_GAIN_PPM,

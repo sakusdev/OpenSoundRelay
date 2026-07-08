@@ -20,8 +20,22 @@
 - [x] Parent volume slider
 - [x] Child read-only synced volume display
 - [x] receiver jitter buffer
-- [ ] Android build CI
+- [x] Android build CI
 - [ ] real-device latency notes
+
+## v0.2.5: Functional cross-platform prototype
+
+- [x] shared UDP transport crate
+- [x] CLI receiver
+- [x] CLI volume sender
+- [x] CLI tone sender
+- [x] desktop GUI receiver
+- [x] desktop GUI tone sender
+- [x] desktop parent volume slider
+- [x] Linux/Windows/macOS Rust CI
+- [x] manual release build workflow
+- [ ] desktop audio playback
+- [ ] desktop microphone capture
 
 ## v0.3: High-quality low-latency audio
 
@@ -42,9 +56,12 @@
 
 ## v0.5: Cross-platform receivers
 
-- [ ] Linux receiver
-- [ ] Windows receiver
-- [ ] macOS receiver
+- [x] Linux GUI protocol receiver
+- [x] Windows GUI protocol receiver
+- [x] macOS GUI protocol receiver
+- [ ] Linux audio receiver
+- [ ] Windows audio receiver
+- [ ] macOS audio receiver
 - [ ] Web receiver prototype
 - [ ] shared protocol conformance tests
 

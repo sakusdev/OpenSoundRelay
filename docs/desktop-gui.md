@@ -1,6 +1,6 @@
 # Desktop GUI
 
-`osr-desktop` is a cross-platform desktop test GUI for OpenSoundRelay.
+`osr-desktop` is a cross-platform desktop GUI for OpenSoundRelay.
 
 It is built with Rust and egui/eframe so the same source can run on:
 
@@ -16,18 +16,19 @@ It is built with Rust and egui/eframe so the same source can run on:
 - volume command sending
 - OSR audio packet logging
 - OSR volume command logging
+- PCM S16LE mono playback through the default desktop output device
 
-The desktop GUI is currently a protocol and transport validation tool. It does not play received audio yet.
+The desktop GUI can now be used as a basic desktop receiver for OSR PCM prototype streams.
 
 ## Run
 
-Receiver:
+Receiver with playback:
 
 ```bash
 cargo run -p osr-desktop
 ```
 
-Then press **Start Receiver**.
+Then press **Start Receiver + Playback**.
 
 Tone sender:
 
@@ -35,13 +36,23 @@ Tone sender:
 2. Press **Start Tone Sender**.
 3. Move the parent volume slider.
 
-## Why this exists
+## Test combinations
 
-The Android app is the first real audio target. The desktop GUI exists so OSR packets, UDP behavior, and parent volume synchronization can be tested from Windows/macOS/Linux without needing two Android devices.
+- Android sender -> desktop receiver
+- desktop tone sender -> Android receiver
+- desktop tone sender -> desktop receiver
+- CLI tone sender -> desktop receiver
+
+## Current limitations
+
+- Desktop microphone capture is not implemented yet.
+- Desktop playback currently expects PCM S16LE mono OSR frames.
+- Opus is not implemented yet.
+- LAN discovery is not implemented yet.
 
 ## Next steps
 
-- Add desktop audio output using a cross-platform audio backend.
-- Add microphone capture.
+- Add desktop microphone capture.
 - Add Opus encode/decode.
 - Add LAN discovery.
+- Add pairing/authentication.

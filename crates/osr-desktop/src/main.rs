@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod audio_output;
+
+use audio_output::PcmAudioOutput;
 use eframe::egui;
-use osr_core::{AudioFrameHeader, VolumeState};
+use osr_core::{AudioCodec, AudioFrameHeader, SampleFormat, VolumeState};
 use osr_net::{IncomingPacket, UdpEndpoint, UdpEndpointConfig};
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -69,7 +72,7 @@ impl eframe::App for OsrDesktopApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("OpenSoundRelay Desktop");
-            ui.label("Cross-platform UDP test GUI for OSR protocol, volume sync, and PCM packet flow.");
+            ui.label("Cross-platform UDP GUI for OSR audio, volume sync, and PCM playback.");
             ui.separator();
 
             ui.horizontal(|ui| {
@@ -90,7 +93,7 @@ impl eframe::App for OsrDesktopApp {
             }
 
             ui.horizontal(|ui| {
-                if ui.button("Start Receiver").clicked() {
+                if ui.button("Start Receiver + Playback").clicked() {
                     self.start_receiver();
                 }
                 if ui.button("Start Tone Sender").clicked() {
@@ -120,7 +123,11 @@ impl eframe::App for OsrDesktopApp {
 impl OsrDesktopApp {
     fn drain_events(&mut self) {
         let Some(rx) = &self.event_rx else { return; };
+        let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        for event in events {
             match event {
                 WorkerEvent::Status(value) => self.status = value,
                 WorkerEvent::Packet(value) => self.push_log(value),
@@ -203,16 +210,32 @@ fn run_receiver_worker(bind: SocketAddr, command_rx: Receiver<WorkerCommand>, ev
             return;
         }
     };
+
+    let output = match PcmAudioOutput::open_default() {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = event_tx.send(WorkerEvent::Error(format!("audio output failed: {error}")));
+            return;
+        }
+    };
     let _ = event_tx.send(WorkerEvent::Status(format!("Receiver listening on {bind}")));
 
     loop {
-        if matches!(command_rx.try_recv(), Ok(WorkerCommand::Stop)) {
-            let _ = event_tx.send(WorkerEvent::Status("Receiver stopped".to_owned()));
-            return;
+        while let Ok(command) = command_rx.try_recv() {
+            if matches!(command, WorkerCommand::Stop) {
+                let _ = event_tx.send(WorkerEvent::Status("Receiver stopped".to_owned()));
+                return;
+            }
         }
 
         match endpoint.recv() {
             Ok(Some(IncomingPacket::Audio { from, frame, .. })) => {
+                if frame.header.codec == AudioCodec::Pcm
+                    && frame.header.sample_format == SampleFormat::S16Le
+                    && frame.header.channels == 1
+                {
+                    output.push_pcm_s16le_mono(&frame.payload);
+                }
                 let _ = event_tx.send(WorkerEvent::Packet(format!(
                     "audio from={from} seq={} bytes={} codec={:?}",
                     frame.header.frame_sequence,

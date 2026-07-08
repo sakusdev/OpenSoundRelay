@@ -14,7 +14,8 @@
 
 - [x] Android sender mode
 - [x] Android receiver mode
-- [x] AudioRecord PCM capture
+- [x] AudioRecord microphone PCM capture
+- [x] Android MediaProjection playback PCM capture
 - [x] AudioTrack playback
 - [x] UDP audio packet prototype
 - [x] Parent volume slider
@@ -23,6 +24,7 @@
 - [x] Android build CI
 - [x] Android multi-target sender fan-out
 - [ ] real-device latency notes
+- [ ] Android foreground service for long playback capture sessions
 
 ## v0.2.5: Functional cross-platform prototype
 

@@ -106,8 +106,8 @@ class PcmAudioSender(
                 var failed = 0
                 for (target in targets) {
                     runCatching {
-                        socket.send(DatagramPacket(audioPacket, audioPacket.size, target.address, target.port))
-                        socket.send(DatagramPacket(volumePacket, volumePacket.size, target.address, target.port))
+                        socket.send(DatagramPacket(audioPacket, audioPacket.size, target))
+                        socket.send(DatagramPacket(volumePacket, volumePacket.size, target))
                     }.onFailure {
                         failed++
                     }

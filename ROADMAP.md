@@ -21,20 +21,26 @@
 - [x] Child read-only synced volume display
 - [x] receiver jitter buffer
 - [x] Android build CI
+- [x] Android multi-target sender fan-out
 - [ ] real-device latency notes
 
 ## v0.2.5: Functional cross-platform prototype
 
 - [x] shared UDP transport crate
+- [x] shared target list parser
+- [x] shared multi-target UDP fan-out
 - [x] CLI receiver
 - [x] CLI volume sender
 - [x] CLI tone sender
+- [x] CLI multi-target fan-out
 - [x] desktop GUI receiver
 - [x] desktop GUI tone sender
 - [x] desktop parent volume slider
+- [x] desktop multi-target fan-out
 - [x] desktop audio playback
 - [x] Linux/Windows/macOS Rust CI
 - [x] manual release build workflow
+- [ ] per-child packet loss/latency stats
 - [ ] desktop microphone capture
 
 ## v0.3: High-quality low-latency audio
@@ -45,6 +51,7 @@
 - [ ] Jitter buffer tuning
 - [ ] latency target modes
 - [ ] packet loss statistics
+- [ ] Opus multi-device bandwidth tuning
 
 ## v0.4: Pairing and discovery
 
@@ -53,6 +60,7 @@
 - [ ] peer identity
 - [ ] reject unauthenticated volume commands
 - [ ] session resumption
+- [ ] automatic child list management
 
 ## v0.5: Cross-platform receivers
 
@@ -69,6 +77,7 @@
 
 - [ ] Android-to-Android stable release
 - [ ] Cross-platform receiver compatibility
+- [ ] multi-device output stable
 - [ ] Opus audio stable
 - [ ] parent volume sync stable
 - [ ] documented OSR v1 protocol

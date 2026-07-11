@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val previewVersionCode = providers.environmentVariable("OSR_VERSION_CODE")
+    .orNull
+    ?.toIntOrNull()
+    ?: 4
+
 android {
     namespace = "dev.sakus.osr"
     compileSdk = 35
@@ -12,8 +17,8 @@ android {
         applicationId = "dev.sakus.osr"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.4.0-dev"
+        versionCode = previewVersionCode
+        versionName = "0.4.0-preview.$previewVersionCode"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")

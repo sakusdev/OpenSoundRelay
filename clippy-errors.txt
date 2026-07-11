@@ -1,6 +1,0 @@
-crates/osr-desktop/src/workers.rs:306:35: warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied: help: explicitly specify the type as `f32`: `1.0_f32`
-crates/osr-desktop/src/workers.rs:322:39: warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied: help: explicitly specify the type as `f32`: `1.0_f32`
-crates/osr-desktop/src/workers.rs:334:35: warning: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied: help: explicitly specify the type as `f32`: `1.0_f32`
-crates/osr-desktop/src/audio_output.rs:35:9: warning: field `dropped_samples` is never read
-warning: `osr-desktop` (bin "osr-desktop") generated 4 warnings (1 duplicate) (run `cargo clippy --fix --bin "osr-desktop" -p osr-desktop -- ` to apply 3 suggestions)
-warning: `osr-desktop` (bin "osr-desktop" test) generated 4 warnings (3 duplicates)

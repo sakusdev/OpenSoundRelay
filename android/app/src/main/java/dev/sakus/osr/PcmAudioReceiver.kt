@@ -2,10 +2,6 @@
 
 package dev.sakus.osr
 
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
-import android.os.Build
 import android.os.Process
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -25,6 +21,9 @@ class PcmAudioReceiver(
 ) {
     private val running = AtomicBoolean(false)
     private val playedFrames = AtomicLong(0)
+    private val decodeFailures = AtomicLong(0)
+    private val outputDrops = AtomicLong(0)
+    private val frameDurationUs = AtomicLong(PcmAudioSender.FRAME_DURATION_US.toLong())
     private var networkWorker: Thread? = null
     private var playbackWorker: Thread? = null
 
@@ -37,6 +36,9 @@ class PcmAudioReceiver(
     @Volatile
     private var activeSynchronizer: VolumeSynchronizer? = null
 
+    @Volatile
+    private var activeSink: LiveAudioSink? = null
+
     fun start() {
         if (!running.compareAndSet(false, true)) return
 
@@ -45,9 +47,13 @@ class PcmAudioReceiver(
             adaptive = quality.adaptiveLatency,
             minFrames = quality.minFrames,
             maxFrames = quality.maxFrames,
+            stableFramesBeforeShrink = quality.stableFramesBeforeShrink,
         )
         liveBuffer = buffer
         playedFrames.set(0)
+        decodeFailures.set(0)
+        outputDrops.set(0)
+        frameDurationUs.set(PcmAudioSender.FRAME_DURATION_US.toLong())
 
         playbackWorker = thread(name = "osr-audio-playback", priority = Thread.MAX_PRIORITY) {
             playbackLoop(buffer)
@@ -73,51 +79,16 @@ class PcmAudioReceiver(
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
 
         val sampleRate = 48_000
-        val channelConfig = AudioFormat.CHANNEL_OUT_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val frameSamples = sampleRate / 100
-        val minBufferBytes = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        if (minBufferBytes <= 0) {
-            status("AudioTrack unsupported")
-            running.set(false)
-            buffer.close()
-            return
-        }
-
-        val track = try {
-            AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build(),
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(channelConfig)
-                        .setEncoding(audioFormat)
-                        .build(),
-                )
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                .setBufferSizeInBytes(minBufferBytes)
-                .build()
+        val sink = try {
+            LiveAudioSinkFactory.create(sampleRate, 1)
         } catch (error: Throwable) {
             status("Audio output setup error: ${error.message}")
             running.set(false)
             buffer.close()
             return
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val requestedStartFrames = frameSamples * quality.targetFrames.coerceAtLeast(1)
-            runCatching {
-                track.setStartThresholdInFrames(
-                    requestedStartFrames.coerceAtMost(track.bufferCapacityInFrames),
-                )
-            }
-        }
+        activeSink = sink
+        val initialSinkStats = sink.stats()
 
         val sync = VolumeSynchronizer(
             OsrProtocol.VolumeCommand(
@@ -131,49 +102,61 @@ class PcmAudioReceiver(
         )
         activeSynchronizer = sync
         val toneProcessor = PcmToneProcessor(sampleRate, quality)
+        val opusDecoder = NativeOpusDecoder.create(
+            sampleRate = sampleRate,
+            channelCount = 1,
+            maxFrameSamples = sampleRate * 60 / 1_000,
+        )
+        var lastSinkUnderruns = initialSinkStats.underruns
 
         try {
-            track.play()
             status(
-                "Listening UDP :$bindPort · target ${quality.targetFrames * 10}ms · " +
-                    "AudioTrack ${track.bufferCapacityInFrames * 1_000L / sampleRate}ms",
+                "Listening UDP :$bindPort · ${initialSinkStats.backend} · " +
+                    "target ${quality.targetFrames * PcmAudioSender.FRAME_DURATION_US / 1_000}ms",
             )
 
             while (running.get()) {
-                val frame = buffer.take(20)
+                val frame = buffer.take(8)
                 if (frame == null) {
                     if (playedFrames.get() > 0) buffer.reportUnderrun()
                     continue
                 }
 
-                val pcm = frame.payload.copyOf()
+                val pcm = when (frame.codec) {
+                    OsrProtocol.CODEC_PCM_S16LE -> {
+                        if (frame.sampleFormat != OsrProtocol.SAMPLE_FORMAT_S16LE) null else frame.payload.copyOf()
+                    }
+
+                    OsrProtocol.CODEC_OPUS -> opusDecoder?.decode(frame.payload)
+                    else -> null
+                }
+                if (pcm == null) {
+                    decodeFailures.incrementAndGet()
+                    continue
+                }
+
                 sync.applyGainToPcmS16Le(pcm, pcm.size)
                 toneProcessor.processPcmS16Le(pcm)
 
-                var offset = 0
-                while (running.get() && offset < pcm.size) {
-                    val written = track.write(
-                        pcm,
-                        offset,
-                        pcm.size - offset,
-                        AudioTrack.WRITE_BLOCKING,
-                    )
-                    if (written <= 0) {
-                        buffer.reportUnderrun()
-                        break
-                    }
-                    offset += written
+                if (sink.write(pcm)) {
+                    playedFrames.incrementAndGet()
+                } else {
+                    outputDrops.incrementAndGet()
                 }
-                if (offset == pcm.size) playedFrames.incrementAndGet()
+
+                val sinkStats = sink.stats()
+                if (sinkStats.underruns > lastSinkUnderruns) {
+                    buffer.reportUnderrun()
+                    lastSinkUnderruns = sinkStats.underruns
+                }
             }
         } catch (error: Throwable) {
             if (running.get()) status("Playback error: ${error.message}")
         } finally {
             activeSynchronizer = null
-            runCatching { track.pause() }
-            runCatching { track.flush() }
-            runCatching { track.stop() }
-            track.release()
+            activeSink = null
+            opusDecoder?.close()
+            sink.close()
             running.set(false)
             buffer.close()
         }
@@ -190,7 +173,7 @@ class PcmAudioReceiver(
         val localSocket = try {
             DatagramSocket(bindPort).apply {
                 soTimeout = 250
-                receiveBufferSize = maxOf(receiveBufferSize, 64 * 1024)
+                receiveBufferSize = maxOf(receiveBufferSize, 128 * 1024)
             }
         } catch (error: Throwable) {
             status("UDP receiver setup error: ${error.message}")
@@ -200,7 +183,7 @@ class PcmAudioReceiver(
             return
         }
         socket = localSocket
-        val packetBuffer = ByteArray(2048)
+        val packetBuffer = ByteArray(4096)
 
         try {
             while (running.get()) {
@@ -240,8 +223,15 @@ class PcmAudioReceiver(
 
                     OsrProtocol.KIND_AUDIO -> {
                         val frame = OsrProtocol.decodeAudioFrame(decoded.payload) ?: continue
-                        if (frame.codec != 1 || frame.sampleFormat != 1 || frame.channels != 1) continue
-                        if (frame.sampleRateHz != 48_000 || frame.frameDurationUs != 10_000) continue
+                        if (frame.channels != 1 || frame.sampleRateHz != 48_000) continue
+                        if (frame.frameDurationUs !in 2_500..20_000) continue
+                        val supported = when (frame.codec) {
+                            OsrProtocol.CODEC_PCM_S16LE -> frame.sampleFormat == OsrProtocol.SAMPLE_FORMAT_S16LE
+                            OsrProtocol.CODEC_OPUS -> frame.sampleFormat == OsrProtocol.SAMPLE_FORMAT_NONE
+                            else -> false
+                        }
+                        if (!supported) continue
+                        frameDurationUs.set(frame.frameDurationUs.toLong())
                         buffer.push(frame)
                     }
                 }
@@ -264,11 +254,18 @@ class PcmAudioReceiver(
         val now = System.nanoTime()
         if (now - lastStatusAt < 1_000_000_000L) return null
         val stats = buffer.stats()
+        val sinkStats = activeSink?.stats()
+        val durationMs = (frameDurationUs.get() / 1_000L).coerceAtLeast(1L)
         val nativeText = if (syncNativeVolume) " native-sync" else ""
+        val sinkText = sinkStats?.let {
+            "${it.backend} hwq=${it.queuedFrames * 1_000L / it.sampleRate.coerceAtLeast(1)}ms " +
+                "xruns=${it.underruns} sink-drop=${it.droppedInputFrames}"
+        } ?: "output-starting"
         status(
-            "Playing=${playedFrames.get()} queue=${stats.bufferedFrames * 10}ms " +
-                "target=${stats.targetFrames * 10}ms lost=${stats.estimatedLostFrames} " +
-                "stale=${stats.droppedStaleFrames} underruns=${stats.underruns}$nativeText",
+            "Playing=${playedFrames.get()} queue=${stats.bufferedFrames * durationMs}ms " +
+                "target=${stats.targetFrames * durationMs}ms lost=${stats.estimatedLostFrames} " +
+                "stale=${stats.droppedStaleFrames} decode=${decodeFailures.get()} " +
+                "out-drop=${outputDrops.get()} $sinkText$nativeText",
         )
         return now
     }

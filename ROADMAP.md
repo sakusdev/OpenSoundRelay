@@ -24,7 +24,7 @@
 - [x] Android build CI
 - [x] Android multi-target sender fan-out
 - [ ] real-device latency notes
-- [ ] Android foreground service for long playback capture sessions
+- [x] Android foreground service for long playback capture sessions
 
 ## v0.2.5: Functional cross-platform prototype
 

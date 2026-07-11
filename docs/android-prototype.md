@@ -7,7 +7,7 @@ This document describes the v0.2 Android-to-Android prototype.
 The Android app can run in three modes:
 
 - **Mic Sender**: captures microphone audio with `AudioRecord`, wraps PCM S16LE frames in OSR `Audio` packets, and sends them over UDP to one or more targets.
-- **Device Audio Sender**: asks for Android MediaProjection screen-share consent, captures capturable device playback audio through `AudioPlaybackCaptureConfiguration`, wraps PCM S16LE frames in OSR `Audio` packets, and sends them over UDP to one or more targets.
+- **Device Audio Sender**: asks for Android MediaProjection screen-share consent, starts a `mediaProjection` foreground service, captures capturable device playback audio through `AudioPlaybackCaptureConfiguration`, wraps PCM S16LE frames in OSR `Audio` packets, and sends them over UDP to one or more targets.
 - **Receiver**: receives OSR packets over UDP, applies parent-controlled OSR stream gain, and plays PCM S16LE through `AudioTrack`.
 
 The prototype uses:
@@ -62,6 +62,8 @@ Android playback capture requires:
 
 Some apps, protected content, DRM content, calls, and apps that opt out of playback capture may produce silence.
 
+After consent, device playback capture is owned by `AudioRelayService`. The session continues when the activity is backgrounded or removed from Recents. Android displays an ongoing notification with a **Stop** action. The service also stops and releases its audio resources when the user ends projection from Android's system UI or locks the screen on versions that automatically end projection.
+
 ## Current limitations
 
 - No Opus yet; PCM is intentionally used for easy debugging.
@@ -69,7 +71,7 @@ Some apps, protected content, DRM content, calls, and apps that opt out of playb
 - No LAN discovery yet; enter receiver IPs manually.
 - No pairing/authentication yet; do not test on untrusted networks.
 - No echo cancellation/noise suppression pipeline yet.
-- No background service yet; the prototype is foreground-only.
+- Microphone sender and receiver modes still follow the activity lifecycle; only device playback capture currently runs in a foreground service.
 
 ## Next steps
 
@@ -77,4 +79,3 @@ Some apps, protected content, DRM content, calls, and apps that opt out of playb
 2. Add Opus encode/decode while keeping the same OSR `AudioFrame` envelope.
 3. Add per-child packet loss/latency stats.
 4. Add Android real-device latency notes.
-5. Add a foreground service for longer device-audio capture sessions.

@@ -59,3 +59,4 @@ jobs:
               --title "$RELEASE_NAME" \
               --prerelease \
               --notes $'Android-only preview build.\n\nIncludes 5 ms Opus, AAudio low-latency playback, 8–512 kbps bitrate control, LAN discovery, native-volume sync, and the new three-tab UI.\n\nDesktop builds are intentionally withheld until their implementation and debugging are complete.'
+          fi

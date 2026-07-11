@@ -336,7 +336,10 @@ fn run_tone_sender_worker(
             payload.len() as u32,
         );
         let audio_report = endpoint.send_audio_to_targets(&targets, header, &payload);
-        if frame_sequence % 100 == 0 || !audio_report.all_sent() || !volume_report.all_sent() {
+        if frame_sequence.is_multiple_of(100)
+            || !audio_report.all_sent()
+            || !volume_report.all_sent()
+        {
             let _ = event_tx.send(WorkerEvent::Packet(format!(
                 "fanout seq={} audio={}/{} volume={}/{} failed_audio={:?} failed_volume={:?}",
                 frame_sequence,

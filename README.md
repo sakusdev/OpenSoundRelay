@@ -10,19 +10,21 @@ OSR is a functional pre-release prototype with:
 
 - Rust protocol core and shared UDP transport
 - Android microphone and device-playback senders
-- Android and desktop PCM receivers
+- **5 ms native Opus frames with live 8–512 kbps bitrate control on Android**
+- **AAudio callback output with exclusive-mode preference and AudioTrack fallback**
+- Android Opus/PCM receiver and desktop PCM receiver
 - foreground-service-backed Android playback capture
 - multi-device UDP unicast fan-out
 - **LAN receiver discovery over UDP broadcast**
 - separate OSR stream-gain synchronization
 - **native media/output-volume synchronization**
-- **adaptive receiver latency correction and jitter buffering**
+- **freshness-first adaptive receiver latency correction**
 - receiver bass, treble, and soft-limiter controls
 - desktop output-rate conversion and live receiver metrics
 - redesigned dark desktop and Android interfaces
 - cross-platform GitHub Actions build workflows
 
-It is still pre-release software. The next major quality step is Opus audio, authenticated pairing, real-device latency measurement, and broader hardware testing.
+It is still pre-release software. Authenticated pairing, desktop Opus support, real-device latency measurement, and broader hardware testing remain major next steps.
 
 ## Key idea
 
@@ -42,7 +44,7 @@ See [docs/lan-discovery.md](./docs/lan-discovery.md).
 
 ## Two independent volume controls
 
-OSR now distinguishes between:
+OSR distinguishes between:
 
 ```text
 OSR stream gain
@@ -64,7 +66,11 @@ Native volume synchronization is best-effort because operating-system permission
 
 ## Audio quality and automatic delay correction
 
-Receivers expose low-latency, balanced, and stable presets plus manual bass and treble controls. The adaptive jitter buffer increases its target after packet gaps and slowly reduces it after a stable period. Desktop playback also performs gentle sample-level drift correction, resamples 48 kHz input to the actual output-device rate, and reports buffer, underrun, packet-loss, and correction statistics.
+Android senders encode 48 kHz mono audio as 5 ms Opus packets using restricted-low-delay mode. The bitrate slider is continuously adjustable from **8 kbps to 512 kbps**, including during an active session.
+
+Android receivers prefer a native AAudio data callback instead of blocking Java writes. The receiver keeps the UDP queue, Opus decoder, and output callback separate, and discards stale audio rather than replaying a growing backlog. Ultra-low, balanced, and stable presets start at 5, 10, and 20 ms of network queue respectively.
+
+Desktop playback performs gentle sample-level drift correction, resamples 48 kHz PCM input to the actual output-device rate, and reports buffer, underrun, packet-loss, and correction statistics. Desktop Opus support is not implemented yet.
 
 See [docs/audio-quality.md](./docs/audio-quality.md).
 
@@ -86,11 +92,12 @@ See [docs/multi-device.md](./docs/multi-device.md).
 - Android-to-Android first
 - cross-platform protocol from day one
 - multi-device output by unicast fan-out
-- high-quality Opus target
+- low-delay Opus transport
+- native callback audio paths where available
 - low-latency UDP/QUIC-friendly packet design
 - separate stream and native-device volume synchronization
 - deterministic fixed-point stream gain math
-- adaptive receiver buffering
+- adaptive freshness-first receiver buffering
 - LAN-first operation
 - no cloud dependency
 - MPL-2.0 licensed
@@ -102,7 +109,7 @@ LAN discovery and audio packets are currently unauthenticated. Use the prototype
 ## Repository layout
 
 ```text
-android/app/         Android sender/receiver app
+android/app/         Android sender/receiver app and native audio bridge
 crates/osr-core/     Portable protocol and synchronization core
 crates/osr-net/      UDP transport, discovery, and fan-out
 crates/osr-cli/      CLI receiver, volume sender, and tone sender
@@ -114,10 +121,11 @@ docs/                Architecture, protocol, networking, and build docs
 
 1. Install the app on two or more Android devices connected to the same Wi-Fi network.
 2. Press **Start receiver** on each child.
-3. On the sender, press **Scan LAN** and add the receivers.
-4. Start **Mic sender** or **Device audio**.
-5. Use the Android media-volume buttons and confirm that opted-in receivers follow the native volume.
-6. Change the latency profile or tone controls on each receiver as needed.
+3. Choose **Ultra low** for the first latency test and avoid Bluetooth.
+4. On the sender, press **Scan LAN** and add the receivers.
+5. Choose an Opus bitrate; 128 kbps is the recommended starting point.
+6. Start **Mic sender** or **Device audio**.
+7. Watch `queue`, `hwq`, `xruns`, `stale`, and `sink-drop` in the receiver status.
 
 See [docs/android-prototype.md](./docs/android-prototype.md).
 

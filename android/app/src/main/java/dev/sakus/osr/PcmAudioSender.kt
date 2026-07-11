@@ -296,7 +296,6 @@ class PcmAudioSender(
                         .build(),
                 )
                 .setBufferSizeInBytes(recordBufferSize)
-                .setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
                 .build()
 
             is CaptureSource.Playback -> createPlaybackAudioRecord(
@@ -331,7 +330,6 @@ class PcmAudioSender(
         return AudioRecord.Builder()
             .setAudioFormat(format)
             .setBufferSizeInBytes(recordBufferSize)
-            .setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
             .setAudioPlaybackCaptureConfig(playbackConfig)
             .build()
     }

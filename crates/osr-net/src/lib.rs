@@ -3,11 +3,18 @@
 //! Cross-platform UDP helpers for OpenSoundRelay.
 //!
 //! This crate intentionally uses only `std::net` so it can compile on Linux,
-//! Windows, and macOS without platform-specific networking dependencies.
+//! Windows, macOS, and Android without platform-specific networking dependencies.
+
+pub mod discovery;
+
+pub use discovery::{
+    discover_devices, DiscoveredDevice, DiscoveryCapabilities, DiscoveryConfig, DiscoveryResponder,
+    DiscoveryRole, DISCOVERY_PORT,
+};
 
 use osr_core::{
     decode_audio_frame, decode_packet, encode_audio_frame, encode_packet, AudioFrame,
-    AudioFrameHeader, PacketKind, VolumeState,
+    AudioFrameHeader, DeviceVolumeState, PacketKind, VolumeState,
 };
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -154,6 +161,11 @@ pub enum IncomingPacket {
         packet_sequence: u64,
         command: VolumeState,
     },
+    DeviceVolume {
+        from: SocketAddr,
+        packet_sequence: u64,
+        command: DeviceVolumeState,
+    },
     Other {
         from: SocketAddr,
         kind: PacketKind,
@@ -234,6 +246,22 @@ impl UdpEndpoint {
         self.send_packet_to_targets(targets, PacketKind::VolumeCommand, &command.encode())
     }
 
+    pub fn send_device_volume<A: ToSocketAddrs>(
+        &mut self,
+        target: A,
+        command: DeviceVolumeState,
+    ) -> io::Result<usize> {
+        self.send_packet(target, PacketKind::DeviceVolume, &command.encode())
+    }
+
+    pub fn send_device_volume_to_targets(
+        &mut self,
+        targets: &TargetList,
+        command: DeviceVolumeState,
+    ) -> FanoutReport {
+        self.send_packet_to_targets(targets, PacketKind::DeviceVolume, &command.encode())
+    }
+
     pub fn send_packet<A: ToSocketAddrs>(
         &mut self,
         target: A,
@@ -309,6 +337,16 @@ impl UdpEndpoint {
                     command,
                 }))
             }
+            PacketKind::DeviceVolume => {
+                let Some(command) = DeviceVolumeState::decode(packet.payload) else {
+                    return Ok(None);
+                };
+                Ok(Some(IncomingPacket::DeviceVolume {
+                    from,
+                    packet_sequence: packet.header.sequence,
+                    command,
+                }))
+            }
             kind => Ok(Some(IncomingPacket::Other {
                 from,
                 kind,
@@ -322,6 +360,7 @@ impl UdpEndpoint {
 pub struct StreamStats {
     pub received_audio_frames: u64,
     pub received_volume_commands: u64,
+    pub received_device_volume_commands: u64,
     pub dropped_audio_frames: u64,
     pub last_audio_sequence: u64,
 }
@@ -336,11 +375,20 @@ impl StreamStats {
                 {
                     self.dropped_audio_frames += 1;
                 } else {
+                    if self.last_audio_sequence != 0
+                        && frame.header.frame_sequence > self.last_audio_sequence + 1
+                    {
+                        self.dropped_audio_frames +=
+                            frame.header.frame_sequence - self.last_audio_sequence - 1;
+                    }
                     self.last_audio_sequence = frame.header.frame_sequence;
                 }
             }
             IncomingPacket::VolumeCommand { .. } => {
                 self.received_volume_commands += 1;
+            }
+            IncomingPacket::DeviceVolume { .. } => {
+                self.received_device_volume_commands += 1;
             }
             IncomingPacket::Other { .. } => {}
         }

@@ -18,6 +18,11 @@ object OsrProtocol {
     const val VOLUME_COMMAND_LEN = 40
     const val DEVICE_VOLUME_COMMAND_LEN = 24
 
+    const val CODEC_PCM_S16LE = 1
+    const val CODEC_OPUS = 2
+    const val SAMPLE_FORMAT_NONE = 0
+    const val SAMPLE_FORMAT_S16LE = 1
+
     data class Packet(
         val kind: Short,
         val flags: Short,
@@ -86,6 +91,32 @@ object OsrProtocol {
         return Packet(kind, flags, sequence, payload)
     }
 
+    fun encodeAudioFrame(
+        streamId: Int,
+        mediaTimeUs: Long,
+        frameSequence: Long,
+        sampleRateHz: Int,
+        channels: Int,
+        codec: Int,
+        sampleFormat: Int,
+        frameDurationUs: Int,
+        audioPayload: ByteArray,
+    ): ByteArray {
+        val buffer = ByteBuffer.allocate(AUDIO_HEADER_LEN + audioPayload.size).order(ByteOrder.BIG_ENDIAN)
+        buffer.putInt(streamId)
+        buffer.putLong(mediaTimeUs)
+        buffer.putLong(frameSequence)
+        buffer.putInt(sampleRateHz)
+        buffer.put(channels.toByte())
+        buffer.put(codec.toByte())
+        buffer.put(sampleFormat.toByte())
+        buffer.put(0.toByte())
+        buffer.putInt(frameDurationUs)
+        buffer.putInt(audioPayload.size)
+        buffer.put(audioPayload)
+        return buffer.array()
+    }
+
     fun encodePcmAudioFrame(
         streamId: Int,
         mediaTimeUs: Long,
@@ -94,21 +125,17 @@ object OsrProtocol {
         channels: Int,
         frameDurationUs: Int,
         pcmPayload: ByteArray,
-    ): ByteArray {
-        val buffer = ByteBuffer.allocate(AUDIO_HEADER_LEN + pcmPayload.size).order(ByteOrder.BIG_ENDIAN)
-        buffer.putInt(streamId)
-        buffer.putLong(mediaTimeUs)
-        buffer.putLong(frameSequence)
-        buffer.putInt(sampleRateHz)
-        buffer.put(channels.toByte())
-        buffer.put(1.toByte())
-        buffer.put(1.toByte())
-        buffer.put(0.toByte())
-        buffer.putInt(frameDurationUs)
-        buffer.putInt(pcmPayload.size)
-        buffer.put(pcmPayload)
-        return buffer.array()
-    }
+    ): ByteArray = encodeAudioFrame(
+        streamId = streamId,
+        mediaTimeUs = mediaTimeUs,
+        frameSequence = frameSequence,
+        sampleRateHz = sampleRateHz,
+        channels = channels,
+        codec = CODEC_PCM_S16LE,
+        sampleFormat = SAMPLE_FORMAT_S16LE,
+        frameDurationUs = frameDurationUs,
+        audioPayload = pcmPayload,
+    )
 
     fun decodeAudioFrame(payload: ByteArray): AudioFrame? {
         if (payload.size < AUDIO_HEADER_LEN) return null

@@ -1,4 +1,4 @@
-name: Diagnose Rust PR
+name: Fix Rust PR
 
 on:
   pull_request:
@@ -8,9 +8,9 @@ permissions:
   contents: write
 
 jobs:
-  diagnose-macos:
+  fix-rust:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Check out PR branch
         uses: actions/checkout@v4
@@ -18,30 +18,54 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Install Rust and Clippy
+      - name: Install Rust formatter
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt
 
-      - name: Capture filtered Clippy diagnostics
+      - name: Apply final Rust fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          main = Path("crates/osr-desktop/src/main.rs")
+          text = main.read_text()
+          old = "    dropped_frames: u64,\n    buffered_ms: u32,"
+          new = "    dropped_frames: u64,\n    dropped_samples: u64,\n    buffered_ms: u32,"
+          if old in text and "dropped_samples: u64" not in text:
+              text = text.replace(old, new, 1)
+          main.write_text(text)
+
+          workers = Path("crates/osr-desktop/src/workers.rs")
+          text = workers.read_text().replace(
+              "egui::Stroke::new(1.0,", "egui::Stroke::new(1.0_f32,"
+          )
+          old = "        dropped_frames: stream.dropped_audio_frames,\n        buffered_ms: audio.buffered_ms,"
+          new = "        dropped_frames: stream.dropped_audio_frames,\n        dropped_samples: audio.dropped_samples,\n        buffered_ms: audio.buffered_ms,"
+          if old in text and "dropped_samples: audio.dropped_samples" not in text:
+              text = text.replace(old, new, 1)
+          workers.write_text(text)
+
+          ui = Path("crates/osr-desktop/src/ui.rs")
+          text = ui.read_text()
+          anchor = '                metric_row(ui, "Estimated lost frames", self.metrics.dropped_frames.to_string());\n'
+          addition = anchor + '                metric_row(ui, "Dropped output samples", self.metrics.dropped_samples.to_string());\n'
+          if anchor in text and "Dropped output samples" not in text:
+              text = text.replace(anchor, addition, 1)
+          ui.write_text(text)
+
+      - name: Format Rust sources
+        run: cargo fmt --all
+
+      - name: Commit fixes
         shell: bash
         run: |
-          set +e
-          cargo clippy --workspace --all-targets --all-features --message-format=short 2>&1 \
-            | sed $'s/\033\[[0-9;]*m//g' \
-            | grep -E '(^error|^warning|\.rs:|could not compile)' \
-            > clippy-errors.txt
-          exit 0
-
-      - name: Commit diagnostic log
-        shell: bash
-        run: |
-          if git diff --quiet -- clippy-errors.txt && git ls-files --error-unmatch clippy-errors.txt >/dev/null 2>&1; then
-            echo "Diagnostic log is unchanged"
+          if git diff --quiet; then
+            echo "No fixes needed"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add clippy-errors.txt
-          git commit -m "chore: capture macOS Clippy diagnostics"
+          git add crates/osr-desktop/src/main.rs crates/osr-desktop/src/ui.rs crates/osr-desktop/src/workers.rs
+          git commit -m "fix: resolve desktop Clippy diagnostics"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}

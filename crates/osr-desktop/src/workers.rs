@@ -187,6 +187,7 @@ fn receiver_metrics(stream: &StreamStats, audio: AudioOutputStats) -> ReceiverMe
     ReceiverMetrics {
         received_frames: stream.received_audio_frames,
         dropped_frames: stream.dropped_audio_frames,
+        dropped_samples: audio.dropped_samples,
         buffered_ms: audio.buffered_ms,
         underruns: audio.underruns,
         timing_corrections: audio.timing_corrections,
@@ -303,7 +304,7 @@ fn run_tone_sender_worker(
 fn card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
         .fill(PANEL)
-        .stroke(egui::Stroke::new(1.0, BORDER))
+        .stroke(egui::Stroke::new(1.0_f32, BORDER))
         .rounding(12.0)
         .inner_margin(14.0)
         .show(ui, add_contents);
@@ -319,7 +320,7 @@ fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(text).strong())
             .fill(ACCENT)
-            .stroke(egui::Stroke::new(1.0, ACCENT_HOVER)),
+            .stroke(egui::Stroke::new(1.0_f32, ACCENT_HOVER)),
     )
 }
 
@@ -331,7 +332,7 @@ fn status_badge(ui: &mut egui::Ui, mode: Mode, status: &str) {
     };
     egui::Frame::none()
         .fill(color.gamma_multiply(0.18))
-        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.65)))
+        .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(0.65)))
         .rounding(999.0)
         .inner_margin(egui::Margin::symmetric(11.0, 6.0))
         .show(ui, |ui| {

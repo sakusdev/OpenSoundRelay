@@ -87,6 +87,7 @@ enum WorkerEvent {
 struct ReceiverMetrics {
     received_frames: u64,
     dropped_frames: u64,
+    dropped_samples: u64,
     buffered_ms: u32,
     underruns: u64,
     timing_corrections: u64,

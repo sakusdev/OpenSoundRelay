@@ -233,6 +233,7 @@ impl OsrDesktopApp {
                 section_title(ui, "Live metrics", "Receiver health and adaptive-buffer state.");
                 metric_row(ui, "Received frames", self.metrics.received_frames.to_string());
                 metric_row(ui, "Estimated lost frames", self.metrics.dropped_frames.to_string());
+                metric_row(ui, "Dropped output samples", self.metrics.dropped_samples.to_string());
                 metric_row(ui, "Buffered audio", format!("{} ms", self.metrics.buffered_ms));
                 metric_row(ui, "Output underruns", self.metrics.underruns.to_string());
                 metric_row(

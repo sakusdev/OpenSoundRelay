@@ -7,36 +7,45 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.SeekBar
-import android.widget.TextView
+import android.widget.*
 import java.net.InetSocketAddress
 
 class MainActivity : Activity() {
     private var sender: PcmAudioSender? = null
     private var receiver: PcmAudioReceiver? = null
-    private lateinit var statusView: TextView
-    private lateinit var volumeView: TextView
-    private var pendingMicrophoneStart: PendingSenderStart? = null
-    private var pendingPlaybackStart: PendingSenderStart? = null
-    private var currentVolumeProgress: Int = 100
+    private lateinit var targets: EditText
+    private lateinit var nearby: LinearLayout
+    private lateinit var status: TextView
+    private lateinit var streamLabel: TextView
+    private lateinit var nativeLabel: TextView
+    private lateinit var nativeSync: CheckBox
+    private lateinit var quality: Spinner
+    private lateinit var bass: SeekBar
+    private lateinit var treble: SeekBar
+    private lateinit var nativeVolume: NativeVolumeController
+    private var streamPercent = 100
+    private var pendingMic: PendingStart? = null
+    private var pendingPlayback: PendingStart? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(createContentView())
+        nativeVolume = NativeVolumeController(this)
+        setContentView(buildUi())
     }
 
     override fun onResume() {
         super.onResume()
-        if (AudioRelayService.isActive()) {
-            setStatus(AudioRelayService.status())
-        }
+        refreshNativeLabel()
+        if (AudioRelayService.isActive()) setStatus(AudioRelayService.status())
     }
 
     override fun onDestroy() {
@@ -45,32 +54,24 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    @Deprecated("MediaProjection consent is kept simple for this prototype.")
+    @Deprecated("Prototype MediaProjection flow")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_MEDIA_PROJECTION) return
-
-        val pending = pendingPlaybackStart.also { pendingPlaybackStart = null }
+        if (requestCode != REQUEST_PROJECTION) return
+        val pending = pendingPlayback.also { pendingPlayback = null }
         if (resultCode != RESULT_OK || data == null || pending == null) {
             setStatus("Device playback capture permission denied")
             return
         }
-
         runCatching {
             sender?.stop()
             sender = null
             AudioRelayService.startPlayback(
-                context = this,
-                targets = pending.targets,
-                gainPpm = pending.gainPpm,
-                projectionResultCode = resultCode,
-                projectionData = data,
+                this, pending.targets, pending.gainPpm, pending.syncNative,
+                resultCode, data,
             )
-        }.onSuccess {
-            setStatus("Starting device audio relay in foreground")
-        }.onFailure { error ->
-            setStatus("Failed to start relay: ${error.message}")
-        }
+        }.onSuccess { setStatus("Starting device audio relay") }
+            .onFailure { setStatus("Failed to start relay: ${it.message}") }
     }
 
     override fun onRequestPermissionsResult(
@@ -80,244 +81,295 @@ class MainActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
-            REQUEST_MICROPHONE_PERMISSION -> {
-                val pending = pendingMicrophoneStart.also { pendingMicrophoneStart = null } ?: return
+            REQUEST_MIC -> {
+                val pending = pendingMic.also { pendingMic = null } ?: return
                 if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    startMicrophoneSender(pending)
-                } else {
-                    setStatus("Microphone permission denied")
-                }
+                    startMic(pending)
+                } else setStatus("Microphone permission denied")
             }
-
-            REQUEST_PLAYBACK_PERMISSIONS -> {
-                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    pendingPlaybackStart = null
-                    setStatus("Record audio permission is required for device playback capture")
-                    return
+            REQUEST_PLAYBACK -> {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    requestProjection()
+                } else {
+                    pendingPlayback = null
+                    setStatus("Record audio permission is required")
                 }
-                requestPlaybackCaptureConsent()
             }
         }
     }
 
-    private fun createContentView(): LinearLayout {
+    private fun buildUi(): ScrollView {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
+            setPadding(dp(18), dp(18), dp(18), dp(28))
+            setBackgroundColor(BG)
         }
-
-        val title = TextView(this).apply {
-            text = "OpenSoundRelay v0.2 Multi-device PCM Prototype"
-            textSize = 20f
-        }
-        root.addView(title)
-
-        val targetHosts = EditText(this).apply {
-            hint = "Targets, one per line or comma-separated. Example: 192.168.1.23:40124"
-            setText("127.0.0.1:40124")
-            setMinLines(2)
-            setMaxLines(4)
-            setSingleLine(false)
-        }
-        root.addView(targetHosts)
-
-        val defaultTargetPort = EditText(this).apply {
-            hint = "Default target UDP port when omitted"
-            setText("40124")
-            setSingleLine(true)
-        }
-        root.addView(defaultTargetPort)
-
-        val bindPort = EditText(this).apply {
-            hint = "Receive UDP port"
-            setText("40124")
-            setSingleLine(true)
-        }
-        root.addView(bindPort)
-
-        volumeView = TextView(this).apply {
-            text = "Parent volume: 100%"
-        }
-        root.addView(volumeView)
-
-        val volume = SeekBar(this).apply {
-            max = 200
-            progress = 100
-        }
-        root.addView(volume)
-
-        val startMicSender = Button(this).apply {
-            text = "Start Mic Sender Fan-out"
-        }
-        root.addView(startMicSender)
-
-        val startPlaybackSender = Button(this).apply {
-            text = "Start Device Audio Sender Fan-out"
-        }
-        root.addView(startPlaybackSender)
-
-        val stopSender = Button(this).apply {
-            text = "Stop Sender"
-        }
-        root.addView(stopSender)
-
-        val startReceiver = Button(this).apply {
-            text = "Start Receiver"
-        }
-        root.addView(startReceiver)
-
-        val stopReceiver = Button(this).apply {
-            text = "Stop Receiver"
-        }
-        root.addView(stopReceiver)
-
-        statusView = TextView(this).apply {
-            text = "Idle"
-            textSize = 14f
-        }
-        root.addView(statusView)
-
-        volume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                currentVolumeProgress = progress
-                val gain = progress * 10_000
-                volumeView.text = "Parent volume: $progress%"
-                sender?.setGainPpm(gain)
-                AudioRelayService.updateGain(this@MainActivity, gain)
-            }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        val scroll = ScrollView(this).apply { isFillViewport = true; addView(root) }
+        root.addView(text("OpenSoundRelay", 29f, Color.WHITE, true))
+        root.addView(text("LAN discovery · adaptive delay · native volume sync", 13f, MUTED).apply {
+            setPadding(0, 0, 0, dp(12))
         })
 
-        startMicSender.setOnClickListener {
-            val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
-            val pending = PendingSenderStart(targets, currentVolumeProgress * 10_000)
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                pendingMicrophoneStart = pending
-                requestPermissions(
-                    arrayOf(Manifest.permission.RECORD_AUDIO),
-                    REQUEST_MICROPHONE_PERMISSION,
-                )
-            } else {
-                startMicrophoneSender(pending)
+        val network = card(root, "Nearby devices", "Find receivers on this Wi-Fi/LAN and add them with one tap.")
+        val scanRow = row()
+        val scan = action("Scan LAN", true)
+        scan.setOnClickListener { scanLan(scan) }
+        scanRow.addView(scan, weight())
+        scanRow.addView(action("Clear").apply { setOnClickListener { targets.setText("") } }, weight(8))
+        network.addView(scanRow)
+        nearby = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        network.addView(nearby)
+        targets = field("Targets, one per line", "", true)
+        network.addView(targets)
+        val ports = row()
+        val targetPort = field("Target port", "40124").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val receivePort = field("Receive port", "40124").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        ports.addView(targetPort, weight())
+        ports.addView(receivePort, weight(8))
+        network.addView(ports)
+
+        val volume = card(root, "Volume synchronization", "Stream gain and native media volume stay separate.")
+        streamLabel = value("OSR stream gain", "100%")
+        volume.addView(streamLabel)
+        val streamSeek = styledSeek(200, 100, ACCENT)
+        volume.addView(streamSeek)
+        val initialNative = nativeVolume.read()
+        nativeLabel = value("Native media volume", nativeText(initialNative))
+        volume.addView(nativeLabel)
+        val nativeSeek = styledSeek(100, initialNative.percent, TEAL)
+        volume.addView(nativeSeek)
+        nativeSync = CheckBox(this).apply {
+            text = "Synchronize sender native volume to receivers"
+            isChecked = true
+            setTextColor(Color.WHITE)
+            buttonTintList = tint(ACCENT_LIGHT)
+            setOnCheckedChangeListener { _, enabled ->
+                sender?.setNativeVolumeSyncEnabled(enabled)
+                AudioRelayService.updateNativeVolumeSync(this@MainActivity, enabled)
             }
         }
+        volume.addView(nativeSync)
 
-        startPlaybackSender.setOnClickListener {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                setStatus("Device playback capture requires Android 10+")
-                return@setOnClickListener
+        val audio = card(root, "Audio quality & delay", "Adaptive buffering reacts to loss, then lowers delay after the link stabilizes.")
+        quality = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("Low latency · ~20 ms", "Balanced · ~40 ms", "Stable · ~80 ms"),
+            )
+            setSelection(1)
+            backgroundTintList = tint(ACCENT_LIGHT)
+        }
+        audio.addView(quality)
+        val bassLabel = value("Bass", "0 dB")
+        bass = styledSeek(24, 12, ACCENT)
+        val trebleLabel = value("Treble", "0 dB")
+        treble = styledSeek(24, 12, ACCENT)
+        audio.addView(bassLabel); audio.addView(bass); audio.addView(trebleLabel); audio.addView(treble)
+
+        val session = card(root, "Relay session", "Send audio or make this phone discoverable as a receiver.")
+        val sendRow = row()
+        sendRow.addView(action("Mic sender", true).apply {
+            setOnClickListener {
+                val pending = pending(targetPort) ?: return@setOnClickListener
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    pendingMic = pending
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
+                } else startMic(pending)
             }
-            val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
-            pendingPlaybackStart = PendingSenderStart(targets, currentVolumeProgress * 10_000)
-            requestPlaybackPermissionsOrConsent()
-        }
+        }, weight())
+        sendRow.addView(action("Device audio", true).apply {
+            setOnClickListener {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    setStatus("Device playback capture requires Android 10+")
+                    return@setOnClickListener
+                }
+                pendingPlayback = pending(targetPort) ?: return@setOnClickListener
+                requestPlaybackPermissions()
+            }
+        }, weight(8))
+        session.addView(sendRow)
+        val receiveRow = row()
+        receiveRow.addView(action("Start receiver", true).apply {
+            setOnClickListener {
+                val port = receivePort.text.toString().toIntOrNull()?.coerceIn(1, 65_535) ?: 40124
+                receiver?.stop()
+                receiver = PcmAudioReceiver(
+                    port, ::setStatus, nativeVolume, nativeSync.isChecked,
+                    qualitySettings(), LanDiscovery.defaultDeviceName(),
+                ).also { it.start() }
+            }
+        }, weight())
+        receiveRow.addView(action("Stop all", danger = true).apply {
+            setOnClickListener {
+                sender?.stop(); sender = null
+                receiver?.stop(); receiver = null
+                AudioRelayService.stop(this@MainActivity)
+                setStatus("Stopped")
+            }
+        }, weight(8))
+        session.addView(receiveRow)
 
-        stopSender.setOnClickListener {
-            sender?.stop()
-            sender = null
-            AudioRelayService.stop(this@MainActivity)
+        status = text("Ready", 14f, TEAL_LIGHT, true).apply {
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = background(STATUS_BG, TEAL, 14)
+            layoutParams = margins(12)
         }
+        root.addView(status)
 
-        startReceiver.setOnClickListener {
-            val port = bindPort.text.toString().toIntOrNull() ?: 40124
-            receiver?.stop()
-            receiver = PcmAudioReceiver(port, ::setStatus).also { it.start() }
+        streamSeek.listener { progress, _ ->
+            streamPercent = progress
+            streamLabel.text = "OSR stream gain                                      $progress%"
+            sender?.setGainPpm(progress * 10_000)
+            AudioRelayService.updateGain(this, progress * 10_000)
         }
-
-        stopReceiver.setOnClickListener {
-            receiver?.stop()
-            receiver = null
+        nativeSeek.listener { progress, fromUser ->
+            if (fromUser) nativeVolume.apply(NativeVolumeState(progress, false))
+            refreshNativeLabel(progress)
         }
-
-        return root
+        bass.listener { progress, _ -> bassLabel.text = "Bass                                      ${progress - 12} dB" }
+        treble.listener { progress, _ -> trebleLabel.text = "Treble                                      ${progress - 12} dB" }
+        return scroll
     }
 
-    private fun parseTargetsFromUi(
-        targetHosts: EditText,
-        defaultTargetPort: EditText,
-    ): List<InetSocketAddress>? {
-        val defaultPort = defaultTargetPort.text.toString().toIntOrNull() ?: 40124
-        val targets = PcmAudioSender.parseTargets(targetHosts.text.toString(), defaultPort)
-        if (targets.isEmpty()) {
-            setStatus("No valid targets")
-            return null
+    private fun scanLan(button: Button) {
+        button.isEnabled = false; button.text = "Scanning…"; setStatus("Scanning local network")
+        LanDiscovery.scan(LanDiscovery.defaultDeviceName()) { result ->
+            runOnUiThread {
+                button.isEnabled = true; button.text = "Scan LAN"
+                result.onSuccess { devices ->
+                    nearby.removeAllViews()
+                    if (devices.isEmpty()) nearby.addView(text("No receivers answered.", 13f, MUTED))
+                    devices.forEach { device ->
+                        nearby.addView(action("＋ ${device.name}   ${device.address.address.hostAddress}:${device.address.port}").apply {
+                            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                            setOnClickListener { addTarget(device.address); setStatus("Added ${device.name}") }
+                        }, margins(6))
+                    }
+                    setStatus("Found ${devices.size} OSR device(s)")
+                }.onFailure { setStatus("LAN scan failed: ${it.message}") }
+            }
         }
-        return targets
     }
 
-    private fun startSender(
-        targets: List<InetSocketAddress>,
-        captureSource: PcmAudioSender.CaptureSource,
-        gainPpm: Int,
-    ) {
+    private fun addTarget(address: InetSocketAddress) {
+        val value = "${address.address?.hostAddress ?: address.hostString}:${address.port}"
+        val current = targets.text.toString().split(',', ';', '\n').map { it.trim() }
+        if (value !in current) targets.setText(targets.text.toString().trim().let { if (it.isEmpty()) value else "$it\n$value" })
+    }
+
+    private fun pending(targetPort: EditText): PendingStart? {
+        val port = targetPort.text.toString().toIntOrNull() ?: 40124
+        val parsed = PcmAudioSender.parseTargets(targets.text.toString(), port)
+        if (parsed.isEmpty()) { setStatus("No valid targets"); return null }
+        return PendingStart(parsed, streamPercent * 10_000, nativeSync.isChecked)
+    }
+
+    private fun startMic(pending: PendingStart) {
+        AudioRelayService.stop(this)
         sender?.stop()
         sender = PcmAudioSender(
-            targets = targets,
-            captureSource = captureSource,
-            status = ::setStatus,
+            pending.targets,
+            PcmAudioSender.CaptureSource.Microphone,
+            ::setStatus,
+            nativeVolumeProvider = { nativeVolume.read() },
         ).also {
-            it.setGainPpm(gainPpm)
+            it.setGainPpm(pending.gainPpm)
+            it.setNativeVolumeSyncEnabled(pending.syncNative)
             it.start()
         }
     }
 
-    private fun startMicrophoneSender(pending: PendingSenderStart) {
-        AudioRelayService.stop(this)
-        startSender(
-            targets = pending.targets,
-            captureSource = PcmAudioSender.CaptureSource.Microphone,
-            gainPpm = pending.gainPpm,
-        )
-    }
-
-    private fun requestPlaybackPermissionsOrConsent() {
-        val missingPermissions = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            missingPermissions.add(Manifest.permission.RECORD_AUDIO)
-        }
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            missingPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        if (missingPermissions.isNotEmpty()) {
-            requestPermissions(missingPermissions.toTypedArray(), REQUEST_PLAYBACK_PERMISSIONS)
-        } else {
-            requestPlaybackCaptureConsent()
+    private fun qualitySettings(): AudioQualitySettings {
+        val low = (bass.progress - 12).toFloat()
+        val high = (treble.progress - 12).toFloat()
+        return when (quality.selectedItemPosition) {
+            0 -> AudioQualitySettings.lowLatency(low, high)
+            2 -> AudioQualitySettings.stable(low, high)
+            else -> AudioQualitySettings.balanced(low, high)
         }
     }
 
-    private fun requestPlaybackCaptureConsent() {
-        if (pendingPlaybackStart == null) return
-        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(
-            projectionManager.createScreenCaptureIntent(),
-            REQUEST_MEDIA_PROJECTION,
-        )
+    private fun requestPlaybackPermissions() {
+        val missing = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) missing += Manifest.permission.RECORD_AUDIO
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) missing += Manifest.permission.POST_NOTIFICATIONS
+        if (missing.isEmpty()) requestProjection() else requestPermissions(missing.toTypedArray(), REQUEST_PLAYBACK)
     }
 
-    private fun setStatus(message: String) {
-        runOnUiThread {
-            statusView.text = message
-        }
+    private fun requestProjection() {
+        if (pendingPlayback == null) return
+        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION)
     }
 
-    private data class PendingSenderStart(
-        val targets: List<InetSocketAddress>,
-        val gainPpm: Int,
-    )
+    private fun setStatus(message: String) = runOnUiThread { status.text = message }
+    private fun refreshNativeLabel(percent: Int? = null) {
+        if (!::nativeLabel.isInitialized) return
+        val state = nativeVolume.read()
+        nativeLabel.text = "Native media volume                                      ${percent ?: state.percent}%${if (state.muted) " · muted" else ""}"
+    }
+    private fun nativeText(state: NativeVolumeState) = "${state.percent}%${if (state.muted) " · muted" else ""}"
+
+    private fun card(parent: LinearLayout, title: String, subtitle: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(15), dp(16), dp(16))
+        background = background(PANEL, BORDER, 18)
+        layoutParams = margins(10)
+        addView(text(title, 18f, Color.WHITE, true))
+        addView(text(subtitle, 12.5f, MUTED).apply { setPadding(0, dp(2), 0, dp(10)) })
+        parent.addView(this)
+    }
+    private fun field(hintText: String, initial: String, multiline: Boolean = false) = EditText(this).apply {
+        hint = hintText; setText(initial); setTextColor(Color.WHITE); setHintTextColor(MUTED); textSize = 14f
+        setPadding(dp(12), dp(10), dp(12), dp(10)); background = background(INPUT, BORDER, 12)
+        if (multiline) { minLines = 2; maxLines = 5; gravity = Gravity.TOP } else setSingleLine(true)
+        layoutParams = margins(6)
+    }
+    private fun action(label: String, primary: Boolean = false, danger: Boolean = false) = Button(this).apply {
+        text = label; isAllCaps = false; setTextColor(Color.WHITE); textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+        background = background(if (danger) DANGER else if (primary) ACCENT else BUTTON, if (danger) DANGER_LIGHT else if (primary) ACCENT_LIGHT else BORDER, 13)
+        minHeight = dp(46); stateListAnimator = null
+    }
+    private fun value(name: String, value: String) = text("$name                                      $value", 13f, Color.WHITE, true)
+    private fun text(value: String, size: Float, color: Int, bold: Boolean = false) = TextView(this).apply {
+        text = value; textSize = size; setTextColor(color); if (bold) setTypeface(typeface, Typeface.BOLD)
+    }
+    private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+    private fun styledSeek(maximum: Int, current: Int, color: Int) = SeekBar(this).apply {
+        max = maximum; progress = current; progressTintList = tint(color); thumbTintList = tint(ACCENT_LIGHT)
+    }
+    private fun SeekBar.listener(block: (Int, Boolean) -> Unit) = setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) = block(progress, fromUser)
+        override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+        override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+    })
+    private fun background(fill: Int, stroke: Int, radius: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE; setColor(fill); cornerRadius = dp(radius).toFloat(); setStroke(dp(1), stroke)
+    }
+    private fun weight(left: Int = 0) = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(left) }
+    private fun margins(top: Int = 0) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(top) }
+    private fun tint(color: Int) = android.content.res.ColorStateList.valueOf(color)
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    private data class PendingStart(val targets: List<InetSocketAddress>, val gainPpm: Int, val syncNative: Boolean)
 
     companion object {
-        private const val REQUEST_MICROPHONE_PERMISSION = 1001
-        private const val REQUEST_PLAYBACK_PERMISSIONS = 1002
-        private const val REQUEST_MEDIA_PROJECTION = 2001
+        private const val REQUEST_MIC = 1001
+        private const val REQUEST_PLAYBACK = 1002
+        private const val REQUEST_PROJECTION = 2001
+        private val BG = Color.rgb(12, 14, 21)
+        private val PANEL = Color.rgb(24, 27, 38)
+        private val INPUT = Color.rgb(17, 20, 29)
+        private val BUTTON = Color.rgb(39, 44, 60)
+        private val BORDER = Color.rgb(55, 62, 82)
+        private val MUTED = Color.rgb(157, 164, 187)
+        private val ACCENT = Color.rgb(103, 92, 255)
+        private val ACCENT_LIGHT = Color.rgb(145, 137, 255)
+        private val TEAL = Color.rgb(48, 185, 151)
+        private val TEAL_LIGHT = Color.rgb(104, 231, 196)
+        private val STATUS_BG = Color.rgb(18, 42, 38)
+        private val DANGER = Color.rgb(111, 43, 59)
+        private val DANGER_LIGHT = Color.rgb(209, 90, 112)
     }
 }

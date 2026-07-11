@@ -1,16 +1,12 @@
 # Android PCM Prototype
 
-This document describes the v0.2 Android-to-Android prototype.
-
-## Current behavior
-
 The Android app can run in three modes:
 
-- **Mic Sender**: captures microphone audio with `AudioRecord`, wraps PCM S16LE frames in OSR `Audio` packets, and sends them over UDP to one or more targets.
-- **Device Audio Sender**: asks for Android MediaProjection screen-share consent, starts a `mediaProjection` foreground service, captures capturable device playback audio through `AudioPlaybackCaptureConfiguration`, wraps PCM S16LE frames in OSR `Audio` packets, and sends them over UDP to one or more targets.
-- **Receiver**: receives OSR packets over UDP, applies parent-controlled OSR stream gain, and plays PCM S16LE through `AudioTrack`.
+- **Mic sender**: captures microphone audio with `AudioRecord` and sends PCM S16LE frames to one or more targets.
+- **Device audio sender**: uses Android playback capture through a MediaProjection foreground service.
+- **Receiver**: receives PCM, applies OSR stream gain, optionally follows the sender's native media volume, adapts its jitter buffer, applies tone controls, and plays through `AudioTrack`.
 
-The prototype uses:
+## Current format
 
 | Item | Value |
 |---|---|
@@ -19,63 +15,56 @@ The prototype uses:
 | sample format | PCM S16LE |
 | frame duration | 10 ms |
 | transport | UDP unicast fan-out |
-| default port | 40124 |
+| audio port | 40124 by default |
+| discovery port | 40125 |
 
-## Single-child test setup
+## LAN discovery setup
 
-1. Install the app on two Android devices connected to the same Wi-Fi network.
-2. On the receiver device, press **Start Receiver**.
-3. On the sender device, enter the receiver device IP address.
-4. Press **Start Mic Sender Fan-out** or **Start Device Audio Sender Fan-out**.
-5. If using device audio mode, approve the Android screen/audio capture prompt.
-6. Move the parent volume slider on the sender.
-7. Confirm that receiver output volume follows the parent stream gain.
+1. Connect the devices to the same Wi-Fi/LAN.
+2. Press **Start receiver** on each child.
+3. On the sender, press **Scan LAN**.
+4. Tap each discovered receiver to add it as a target.
+5. Start the microphone or device-audio sender.
 
-## Multi-child test setup
+Manual target entry remains available when Wi-Fi client isolation or a firewall blocks broadcast discovery.
 
-1. Start receiver mode on each child device.
-2. Enter every child address in the sender target field, one per line or comma-separated.
-3. Press **Start Mic Sender Fan-out** or **Start Device Audio Sender Fan-out**.
-4. If using device audio mode, approve the Android screen/audio capture prompt.
-5. Move the parent volume slider.
-6. Confirm that all children follow the same parent stream volume.
+## Native media-volume synchronization
 
-Example target field:
+The sender samples Android's `STREAM_MUSIC` state every control interval. When native sync is enabled it sends a separate `DeviceVolume` command to every receiver. This includes changes made with hardware volume buttons.
 
-```text
-192.168.1.10:40124
-192.168.1.11:40124
-192.168.1.12:40124
-```
+A receiver applies the command through `AudioManager` only when its native-sync option was enabled before receiver startup. OSR stream gain remains independent and is always applied inside the received PCM stream.
 
-If the port is omitted, the app uses the default target port field.
+## Audio quality and delay
+
+The receiver provides:
+
+- low-latency, balanced, and stable starting profiles
+- adaptive jitter target after packet gaps
+- gradual latency reduction after a stable period
+- bass and treble controls from -12 dB to +12 dB
+- soft limiting after EQ
+- low-latency `AudioTrack` performance mode
+- status text with buffered time, estimated loss, and correction count
 
 ## Device playback capture notes
 
 Android playback capture requires:
 
-- Android 10 or later.
-- `RECORD_AUDIO` permission.
-- User approval through the MediaProjection screen capture prompt.
-- The captured app must allow playback capture.
-- The captured audio usage must be capturable, such as media, game, or unknown usage.
+- Android 10 or later
+- `RECORD_AUDIO` permission
+- user approval through the MediaProjection prompt
+- a captured app that allows playback capture
+- capturable audio usage such as media, game, or unknown
 
-Some apps, protected content, DRM content, calls, and apps that opt out of playback capture may produce silence.
+Protected content, DRM media, calls, and apps that opt out may produce silence.
 
-After consent, device playback capture is owned by `AudioRelayService`. The session continues when the activity is backgrounded or removed from Recents. Android displays an ongoing notification with a **Stop** action. The service also stops and releases its audio resources when the user ends projection from Android's system UI or locks the screen on versions that automatically end projection.
+The foreground service keeps device playback capture alive when the activity is backgrounded or removed from Recents. Android displays an ongoing notification with a **Stop** action.
 
 ## Current limitations
 
-- No Opus yet; PCM is intentionally used for easy debugging.
-- The receiver jitter buffer is intentionally simple and still needs tuning.
-- No LAN discovery yet; enter receiver IPs manually.
-- No pairing/authentication yet; do not test on untrusted networks.
-- No echo cancellation/noise suppression pipeline yet.
-- Microphone sender and receiver modes still follow the activity lifecycle; only device playback capture currently runs in a foreground service.
-
-## Next steps
-
-1. Add LAN discovery or QR pairing.
-2. Add Opus encode/decode while keeping the same OSR `AudioFrame` envelope.
-3. Add per-child packet loss/latency stats.
-4. Add Android real-device latency notes.
+- no Opus yet
+- mono PCM only
+- no pairing or authentication
+- broadcast discovery may be blocked on guest/enterprise Wi-Fi
+- microphone sender and receiver still follow the activity lifecycle
+- audio focus and route changes need broader device testing

@@ -20,9 +20,11 @@ import java.net.InetSocketAddress
 
 class AudioRelayService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val nativeVolumeController by lazy { NativeVolumeController(this) }
     private var sender: PcmAudioSender? = null
     private var generation = 0L
     private var gainPpm = 1_000_000
+    private var syncNativeVolume = true
     private var notificationText = "Starting device audio relay"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -31,6 +33,9 @@ class AudioRelayService : Service() {
         when (intent?.action) {
             ACTION_START_PLAYBACK -> startPlayback(intent)
             ACTION_SET_GAIN -> setGain(intent.getIntExtra(EXTRA_GAIN_PPM, gainPpm))
+            ACTION_SET_NATIVE_SYNC -> setNativeSync(
+                intent.getBooleanExtra(EXTRA_SYNC_NATIVE_VOLUME, syncNativeVolume),
+            )
             ACTION_STOP -> stopRelay("Sender stopped")
             else -> if (sender == null) stopSelf(startId)
         }
@@ -66,6 +71,7 @@ class AudioRelayService : Service() {
         previousSender?.stop()
 
         gainPpm = intent.getIntExtra(EXTRA_GAIN_PPM, 1_000_000).coerceIn(0, 2_000_000)
+        syncNativeVolume = intent.getBooleanExtra(EXTRA_SYNC_NATIVE_VOLUME, true)
 
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val mediaProjection = try {
@@ -85,15 +91,22 @@ class AudioRelayService : Service() {
             captureSource = PcmAudioSender.CaptureSource.Playback(mediaProjection),
             status = { message -> onSenderStatus(currentGeneration, message) },
             onStopped = { onSenderStopped(currentGeneration) },
+            nativeVolumeProvider = { nativeVolumeController.read() },
         )
         sender = nextSender
         nextSender.setGainPpm(gainPpm)
+        nextSender.setNativeVolumeSyncEnabled(syncNativeVolume)
         nextSender.start()
     }
 
     private fun setGain(value: Int) {
         gainPpm = value.coerceIn(0, 2_000_000)
         sender?.setGainPpm(gainPpm)
+    }
+
+    private fun setNativeSync(value: Boolean) {
+        syncNativeVolume = value
+        sender?.setNativeVolumeSyncEnabled(value)
     }
 
     private fun onSenderStatus(senderGeneration: Long, message: String) {
@@ -220,10 +233,12 @@ class AudioRelayService : Service() {
     companion object {
         private const val ACTION_START_PLAYBACK = "dev.sakus.osr.action.START_PLAYBACK"
         private const val ACTION_SET_GAIN = "dev.sakus.osr.action.SET_GAIN"
+        private const val ACTION_SET_NATIVE_SYNC = "dev.sakus.osr.action.SET_NATIVE_SYNC"
         private const val ACTION_STOP = "dev.sakus.osr.action.STOP"
         private const val EXTRA_TARGET_HOSTS = "target_hosts"
         private const val EXTRA_TARGET_PORTS = "target_ports"
         private const val EXTRA_GAIN_PPM = "gain_ppm"
+        private const val EXTRA_SYNC_NATIVE_VOLUME = "sync_native_volume"
         private const val EXTRA_PROJECTION_RESULT_CODE = "projection_result_code"
         private const val EXTRA_PROJECTION_DATA = "projection_data"
         private const val CHANNEL_ID = "osr_audio_relay"
@@ -239,6 +254,7 @@ class AudioRelayService : Service() {
             context: Context,
             targets: List<InetSocketAddress>,
             gainPpm: Int,
+            syncNativeVolume: Boolean,
             projectionResultCode: Int,
             projectionData: Intent,
         ) {
@@ -253,6 +269,7 @@ class AudioRelayService : Service() {
                     ArrayList(targets.map { it.port }),
                 )
                 putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+                putExtra(EXTRA_SYNC_NATIVE_VOLUME, syncNativeVolume)
                 putExtra(EXTRA_PROJECTION_RESULT_CODE, projectionResultCode)
                 putExtra(EXTRA_PROJECTION_DATA, projectionData)
             }
@@ -273,6 +290,15 @@ class AudioRelayService : Service() {
             val intent = Intent(context, AudioRelayService::class.java).apply {
                 action = ACTION_SET_GAIN
                 putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+            }
+            context.startService(intent)
+        }
+
+        fun updateNativeVolumeSync(context: Context, enabled: Boolean) {
+            if (!sessionActive) return
+            val intent = Intent(context, AudioRelayService::class.java).apply {
+                action = ACTION_SET_NATIVE_SYNC
+                putExtra(EXTRA_SYNC_NATIVE_VOLUME, enabled)
             }
             context.startService(intent)
         }

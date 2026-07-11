@@ -112,6 +112,16 @@ fn run_child(args: &[String]) -> Result<(), String> {
                     frame.header.codec
                 );
             }
+            IncomingPacket::DeviceVolumeCommand { from, command, .. } => {
+                println!(
+                    "device-volume from={from} stream={} epoch={} seq={} volume_ppm={} muted={}",
+                    command.stream_id,
+                    command.epoch,
+                    command.sequence,
+                    command.gain_ppm,
+                    command.muted
+                );
+            }
             IncomingPacket::Other { from, kind, .. } => {
                 eprintln!("ignored packet from={from} kind={kind:?}");
             }

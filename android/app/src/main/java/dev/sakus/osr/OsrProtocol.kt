@@ -10,6 +10,7 @@ object OsrProtocol {
     const val PROTOCOL_VERSION: Short = 1
     const val KIND_AUDIO: Short = 2
     const val KIND_VOLUME_COMMAND: Short = 3
+    const val KIND_DEVICE_VOLUME_COMMAND: Short = 5
     const val PACKET_HEADER_LEN = 28
     const val AUDIO_HEADER_LEN = 36
     const val VOLUME_COMMAND_LEN = 40

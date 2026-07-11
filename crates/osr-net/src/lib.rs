@@ -366,6 +366,9 @@ mod tests {
 
     #[test]
     fn rejects_empty_target_list() {
-        assert_eq!(TargetList::parse("\n, ;"), Err(TargetParseError::Empty));
+        assert!(matches!(
+            TargetList::parse("\n, ;"),
+            Err(TargetParseError::Empty)
+        ));
     }
 }

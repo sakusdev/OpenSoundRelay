@@ -12,6 +12,7 @@ OSR is now a functional prototype with:
 - shared UDP transport crate
 - CLI tools
 - Android-to-Android PCM sender/receiver app
+- foreground-service-backed Android device playback capture
 - desktop GUI for Linux/Windows/macOS protocol testing and PCM playback
 - multi-device UDP unicast fan-out
 - parent-authoritative stream volume synchronization

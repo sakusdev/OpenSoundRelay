@@ -23,13 +23,20 @@ class MainActivity : Activity() {
     private var receiver: PcmAudioReceiver? = null
     private lateinit var statusView: TextView
     private lateinit var volumeView: TextView
+    private var pendingMicrophoneStart: PendingSenderStart? = null
     private var pendingPlaybackStart: PendingSenderStart? = null
     private var currentVolumeProgress: Int = 100
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestRecordAudioPermissionIfNeeded()
         setContentView(createContentView())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (AudioRelayService.isActive()) {
+            setStatus(AudioRelayService.status())
+        }
     }
 
     override fun onDestroy() {
@@ -49,18 +56,48 @@ class MainActivity : Activity() {
             return
         }
 
-        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val mediaProjection = projectionManager.getMediaProjection(resultCode, data)
-        if (mediaProjection == null) {
-            setStatus("Failed to create MediaProjection")
-            return
+        runCatching {
+            sender?.stop()
+            sender = null
+            AudioRelayService.startPlayback(
+                context = this,
+                targets = pending.targets,
+                gainPpm = pending.gainPpm,
+                projectionResultCode = resultCode,
+                projectionData = data,
+            )
+        }.onSuccess {
+            setStatus("Starting device audio relay in foreground")
+        }.onFailure { error ->
+            setStatus("Failed to start relay: ${error.message}")
         }
+    }
 
-        startSender(
-            targets = pending.targets,
-            captureSource = PcmAudioSender.CaptureSource.Playback(mediaProjection),
-            gainPpm = pending.gainPpm,
-        )
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            REQUEST_MICROPHONE_PERMISSION -> {
+                val pending = pendingMicrophoneStart.also { pendingMicrophoneStart = null } ?: return
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    startMicrophoneSender(pending)
+                } else {
+                    setStatus("Microphone permission denied")
+                }
+            }
+
+            REQUEST_PLAYBACK_PERMISSIONS -> {
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    pendingPlaybackStart = null
+                    setStatus("Record audio permission is required for device playback capture")
+                    return
+                }
+                requestPlaybackCaptureConsent()
+            }
+        }
     }
 
     private fun createContentView(): LinearLayout {
@@ -150,6 +187,7 @@ class MainActivity : Activity() {
                 val gain = progress * 10_000
                 volumeView.text = "Parent volume: $progress%"
                 sender?.setGainPpm(gain)
+                AudioRelayService.updateGain(this@MainActivity, gain)
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
@@ -157,33 +195,33 @@ class MainActivity : Activity() {
         })
 
         startMicSender.setOnClickListener {
-            requestRecordAudioPermissionIfNeeded()
             val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
-            startSender(
-                targets = targets,
-                captureSource = PcmAudioSender.CaptureSource.Microphone,
-                gainPpm = currentVolumeProgress * 10_000,
-            )
+            val pending = PendingSenderStart(targets, currentVolumeProgress * 10_000)
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                pendingMicrophoneStart = pending
+                requestPermissions(
+                    arrayOf(Manifest.permission.RECORD_AUDIO),
+                    REQUEST_MICROPHONE_PERMISSION,
+                )
+            } else {
+                startMicrophoneSender(pending)
+            }
         }
 
         startPlaybackSender.setOnClickListener {
-            requestRecordAudioPermissionIfNeeded()
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 setStatus("Device playback capture requires Android 10+")
                 return@setOnClickListener
             }
             val targets = parseTargetsFromUi(targetHosts, defaultTargetPort) ?: return@setOnClickListener
             pendingPlaybackStart = PendingSenderStart(targets, currentVolumeProgress * 10_000)
-            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            startActivityForResult(
-                projectionManager.createScreenCaptureIntent(),
-                REQUEST_MEDIA_PROJECTION,
-            )
+            requestPlaybackPermissionsOrConsent()
         }
 
         stopSender.setOnClickListener {
             sender?.stop()
             sender = null
+            AudioRelayService.stop(this@MainActivity)
         }
 
         startReceiver.setOnClickListener {
@@ -229,15 +267,46 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun setStatus(message: String) {
-        runOnUiThread {
-            statusView.text = message
+    private fun startMicrophoneSender(pending: PendingSenderStart) {
+        AudioRelayService.stop(this)
+        startSender(
+            targets = pending.targets,
+            captureSource = PcmAudioSender.CaptureSource.Microphone,
+            gainPpm = pending.gainPpm,
+        )
+    }
+
+    private fun requestPlaybackPermissionsOrConsent() {
+        val missingPermissions = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            missingPermissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            missingPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        if (missingPermissions.isNotEmpty()) {
+            requestPermissions(missingPermissions.toTypedArray(), REQUEST_PLAYBACK_PERMISSIONS)
+        } else {
+            requestPlaybackCaptureConsent()
         }
     }
 
-    private fun requestRecordAudioPermissionIfNeeded() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1001)
+    private fun requestPlaybackCaptureConsent() {
+        if (pendingPlaybackStart == null) return
+        val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        startActivityForResult(
+            projectionManager.createScreenCaptureIntent(),
+            REQUEST_MEDIA_PROJECTION,
+        )
+    }
+
+    private fun setStatus(message: String) {
+        runOnUiThread {
+            statusView.text = message
         }
     }
 
@@ -247,6 +316,8 @@ class MainActivity : Activity() {
     )
 
     companion object {
+        private const val REQUEST_MICROPHONE_PERMISSION = 1001
+        private const val REQUEST_PLAYBACK_PERMISSIONS = 1002
         private const val REQUEST_MEDIA_PROJECTION = 2001
     }
 }

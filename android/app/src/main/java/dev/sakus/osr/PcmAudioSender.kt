@@ -9,6 +9,8 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -20,6 +22,7 @@ class PcmAudioSender(
     private val targets: List<InetSocketAddress>,
     private val captureSource: CaptureSource,
     private val status: (String) -> Unit,
+    private val onStopped: () -> Unit = {},
 ) {
     sealed class CaptureSource {
         data object Microphone : CaptureSource()
@@ -41,7 +44,12 @@ class PcmAudioSender(
         }
         if (!running.compareAndSet(false, true)) return
         worker = thread(name = "osr-pcm-sender") {
-            runLoop()
+            try {
+                runLoop()
+            } finally {
+                running.set(false)
+                runCatching { onStopped() }
+            }
         }
     }
 
@@ -52,6 +60,37 @@ class PcmAudioSender(
     }
 
     private fun runLoop() {
+        val playbackSource = captureSource as? CaptureSource.Playback
+        val projectionCallback = playbackSource?.let {
+            object : MediaProjection.Callback() {
+                override fun onStop() {
+                    status("Device playback capture ended")
+                    stop()
+                }
+            }
+        }
+
+        try {
+            if (playbackSource != null && projectionCallback != null) {
+                playbackSource.mediaProjection.registerCallback(
+                    projectionCallback,
+                    Handler(Looper.getMainLooper()),
+                )
+            }
+            captureAndSend()
+        } catch (error: Throwable) {
+            if (running.get()) status("Sender error: ${error.message}")
+        } finally {
+            running.set(false)
+            if (playbackSource != null && projectionCallback != null) {
+                runCatching { playbackSource.mediaProjection.unregisterCallback(projectionCallback) }
+                runCatching { playbackSource.mediaProjection.stop() }
+            }
+            status("Sender stopped")
+        }
+    }
+
+    private fun captureAndSend() {
         val sampleRate = 48_000
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
@@ -139,18 +178,10 @@ class PcmAudioSender(
                     )
                 }
             }
-        } catch (error: Throwable) {
-            if (running.get()) status("Sender error: ${error.message}")
         } finally {
-            running.set(false)
             runCatching { recorder.stop() }
             recorder.release()
             socket.close()
-            val playbackSource = captureSource as? CaptureSource.Playback
-            if (playbackSource != null) {
-                runCatching { playbackSource.mediaProjection.stop() }
-            }
-            status("Sender stopped")
         }
     }
 

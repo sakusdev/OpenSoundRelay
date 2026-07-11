@@ -7,6 +7,7 @@
 //! rules, then connect them to native audio I/O on each platform.
 
 pub mod audio;
+pub mod device_volume;
 pub mod packet;
 pub mod protocol;
 pub mod volume;
@@ -14,6 +15,10 @@ pub mod volume;
 pub use audio::{
     decode_audio_frame, encode_audio_frame, AudioCodec, AudioFrame, AudioFrameDecodeError,
     AudioFrameHeader, SampleFormat,
+};
+pub use device_volume::{
+    DeviceVolumePercent, DeviceVolumeState, DeviceVolumeSynchronizer,
+    MAX_DEVICE_VOLUME_PERCENT,
 };
 pub use packet::{decode_packet, encode_packet, Packet, PacketDecodeError, PacketHeader};
 pub use protocol::{PacketKind, OSR_MAGIC, PROTOCOL_VERSION};

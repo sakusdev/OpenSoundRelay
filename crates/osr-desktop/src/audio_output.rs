@@ -52,8 +52,7 @@ struct SharedAudioState {
 
 impl SharedAudioState {
     fn target_samples(&self) -> usize {
-        ((self.sample_rate as u64 * self.config.target_latency_ms as u64) / 1_000)
-            .max(1) as usize
+        ((self.sample_rate as u64 * self.config.target_latency_ms as u64) / 1_000).max(1) as usize
     }
 
     fn render_next(&mut self) -> i16 {
@@ -120,7 +119,10 @@ impl SharedAudioState {
             let source_index = source_position.floor() as usize;
             let fraction = source_position - source_index as f32;
             let a = input[source_index] as f32;
-            let b = input.get(source_index + 1).copied().unwrap_or(input[source_index]) as f32;
+            let b = input
+                .get(source_index + 1)
+                .copied()
+                .unwrap_or(input[source_index]) as f32;
             let input_sample = a + (b - a) * fraction;
 
             self.low_pass += alpha * (input_sample - self.low_pass);
@@ -166,7 +168,9 @@ impl PcmAudioOutput {
         let device = host
             .default_output_device()
             .ok_or_else(|| "no default output device".to_owned())?;
-        let device_name = device.name().unwrap_or_else(|_| "Default output".to_owned());
+        let device_name = device
+            .name()
+            .unwrap_or_else(|_| "Default output".to_owned());
         let supported_config = device
             .default_output_config()
             .map_err(|err| format!("failed to read default output config: {err}"))?;
@@ -265,8 +269,7 @@ impl PcmAudioOutput {
     pub fn stats(&self) -> AudioOutputStats {
         match self.state.lock() {
             Ok(state) => AudioOutputStats {
-                buffered_ms: ((state.queue.len() as u64 * 1_000) / state.sample_rate as u64)
-                    as u32,
+                buffered_ms: ((state.queue.len() as u64 * 1_000) / state.sample_rate as u64) as u32,
                 underruns: state.underruns,
                 dropped_samples: state.dropped_samples,
                 timing_corrections: state.timing_corrections,

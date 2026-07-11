@@ -37,7 +37,7 @@ fn read_platform_volume() -> Result<NativeVolumeState, String> {
         }
     }
 
-    let volume = command_output("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) ?;
+    let volume = command_output("pactl", &["get-sink-volume", "@DEFAULT_SINK@"])?;
     let percent = volume
         .split_whitespace()
         .find_map(|part| part.strip_suffix('%')?.parse::<u16>().ok())
@@ -123,7 +123,13 @@ fn read_platform_volume() -> Result<NativeVolumeState, String> {
     );
     let output = command_output(
         "powershell.exe",
-        &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script],
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ],
     )?;
     let line = output.lines().last().unwrap_or_default().trim();
     let mut parts = line.split('|');
@@ -148,7 +154,13 @@ fn set_platform_volume(state: NativeVolumeState) -> Result<(), String> {
     );
     command_status(
         "powershell.exe",
-        &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &script],
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ],
     )
 }
 

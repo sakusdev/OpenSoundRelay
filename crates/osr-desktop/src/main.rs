@@ -7,8 +7,8 @@ use audio_output::{AudioOutputConfig, AudioOutputStats, PcmAudioOutput};
 use eframe::egui;
 use native_volume::{NativeVolume, NativeVolumeState};
 use osr_core::{
-    apply_gain_i16, AudioCodec, AudioFrameHeader, DeviceVolumeState,
-    DeviceVolumeSynchronizer, SampleFormat, VolumeState, VolumeSynchronizer,
+    apply_gain_i16, AudioCodec, AudioFrameHeader, DeviceVolumeState, DeviceVolumeSynchronizer,
+    SampleFormat, VolumeState, VolumeSynchronizer,
 };
 use osr_net::{
     discover_devices, DiscoveredDevice, DiscoveryConfig, DiscoveryResponder, IncomingPacket,

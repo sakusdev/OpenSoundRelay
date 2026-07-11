@@ -151,17 +151,15 @@ impl DiscoveryMessage {
             return None;
         }
         let role = DiscoveryRole::from_u8(input[2])?;
-        let capabilities = DiscoveryCapabilities(u32::from_be_bytes([
-            input[4], input[5], input[6], input[7],
-        ]));
+        let capabilities =
+            DiscoveryCapabilities(u32::from_be_bytes([input[4], input[5], input[6], input[7]]));
         let audio_port = u16::from_be_bytes([input[8], input[9]]);
         let name_len = u16::from_be_bytes([input[10], input[11]]) as usize;
         if name_len > MAX_DEVICE_NAME_BYTES || input.len() != DISCOVERY_HEADER_LEN + name_len {
             return None;
         }
         let nonce = u64::from_be_bytes([
-            input[12], input[13], input[14], input[15], input[16], input[17], input[18],
-            input[19],
+            input[12], input[13], input[14], input[15], input[16], input[17], input[18], input[19],
         ]);
         let name = std::str::from_utf8(&input[20..]).ok()?.trim().to_owned();
         Some(Self {
@@ -242,7 +240,9 @@ pub fn discover_devices(
     let broadcast = SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT));
 
     let started = Instant::now();
-    let mut last_probe = started.checked_sub(Duration::from_secs(1)).unwrap_or(started);
+    let mut last_probe = started
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or(started);
     let mut buffer = [0u8; 512];
     let mut devices = HashMap::<SocketAddr, DiscoveredDevice>::new();
 

@@ -17,8 +17,7 @@ pub use audio::{
     AudioFrameHeader, SampleFormat,
 };
 pub use device_volume::{
-    DeviceVolumePercent, DeviceVolumeState, DeviceVolumeSynchronizer,
-    MAX_DEVICE_VOLUME_PERCENT,
+    DeviceVolumePercent, DeviceVolumeState, DeviceVolumeSynchronizer, MAX_DEVICE_VOLUME_PERCENT,
 };
 pub use packet::{decode_packet, encode_packet, Packet, PacketDecodeError, PacketHeader};
 pub use protocol::{PacketKind, OSR_MAGIC, PROTOCOL_VERSION};

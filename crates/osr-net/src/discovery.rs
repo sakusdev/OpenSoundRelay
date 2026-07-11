@@ -301,7 +301,7 @@ pub fn discover_devices(
     }
 
     let mut devices: Vec<_> = devices.into_values().collect();
-    devices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    devices.sort_by_key(|device| device.name.to_lowercase());
     Ok(devices)
 }
 

@@ -21,6 +21,7 @@ import kotlin.concurrent.thread
 class PcmAudioSender(
     private val targets: List<InetSocketAddress>,
     private val captureSource: CaptureSource,
+    private val qualityProfile: AudioQualityProfile = AudioQualityProfile.Balanced,
     private val status: (String) -> Unit,
     private val onStopped: () -> Unit = {},
 ) {
@@ -29,13 +30,33 @@ class PcmAudioSender(
         class Playback(val mediaProjection: MediaProjection) : CaptureSource()
     }
 
+    private data class CaptureSpec(
+        val sampleRateHz: Int,
+        val channels: Int,
+        val frameDurationUs: Int,
+    ) {
+        val inputChannelMask: Int
+            get() = if (channels == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
+
+        val frameBytes: Int
+            get() = ((sampleRateHz.toLong() * frameDurationUs * channels * 2) / 1_000_000L).toInt()
+    }
+
+    private data class CaptureSession(
+        val recorder: AudioRecord,
+        val spec: CaptureSpec,
+    )
+
     private val running = AtomicBoolean(false)
-    private val gainPpm = AtomicInteger(1_000_000)
+    private val deviceVolumePpm = AtomicInteger(NativeVolumeController.ONE_MILLION)
     private var worker: Thread? = null
 
-    fun setGainPpm(value: Int) {
-        gainPpm.set(value.coerceIn(0, 2_000_000))
+    fun setDeviceVolumePpm(value: Int) {
+        deviceVolumePpm.set(value.coerceIn(0, NativeVolumeController.ONE_MILLION))
     }
+
+    @Deprecated("Use setDeviceVolumePpm")
+    fun setGainPpm(value: Int) = setDeviceVolumePpm(value)
 
     fun start() {
         if (targets.isEmpty()) {
@@ -79,7 +100,7 @@ class PcmAudioSender(
             }
             captureAndSend()
         } catch (error: Throwable) {
-            if (running.get()) status("Sender error: ${error.message}")
+            if (running.get()) status("Sender error: ${error.message ?: error.javaClass.simpleName}")
         } finally {
             running.set(false)
             if (playbackSource != null && projectionCallback != null) {
@@ -91,53 +112,42 @@ class PcmAudioSender(
     }
 
     private fun captureAndSend() {
-        val sampleRate = 48_000
-        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        if (minBuffer <= 0) {
-            status("AudioRecord unsupported")
-            running.set(false)
+        val session = createCaptureSession() ?: run {
+            status("No supported audio capture format")
             return
         }
-
-        val frameBytes = sampleRate / 100 * 2 // 10ms, mono, s16
-        val recordBufferSize = maxOf(minBuffer, frameBytes * 4)
-        val payload = ByteArray(frameBytes)
+        val recorder = session.recorder
+        val spec = session.spec
+        val payload = ByteArray(spec.frameBytes)
+        val socket = DatagramSocket()
         var packetSequence = 1L
         var frameSequence = 1L
         var volumeSequence = 1L
+        var lastSentVolume = -1
         var statusCounter = 0L
         val streamId = 1
-        val epoch = 1L
-
-        val recorder = try {
-            createAudioRecord(sampleRate, channelConfig, audioFormat, recordBufferSize)
-        } catch (error: Throwable) {
-            status("Audio capture setup error: ${error.message}")
-            running.set(false)
-            return
-        }
-
-        val socket = DatagramSocket()
+        val epoch = System.currentTimeMillis().coerceAtLeast(1L)
+        val framesPerStatus = (1_000_000L / spec.frameDurationUs).coerceAtLeast(1L)
 
         try {
             recorder.startRecording()
-            status("Sending ${captureSource.label()} PCM to ${targets.size} target(s)")
+            status(
+                "Sending ${qualityProfile.displayName} ${spec.sampleRateHz / 1_000} kHz " +
+                    "${if (spec.channels == 2) "stereo" else "mono"} to ${targets.size} device(s)",
+            )
 
             while (running.get()) {
-                val read = recorder.read(payload, 0, payload.size)
-                if (read <= 0) continue
+                if (!readFullFrame(recorder, payload)) break
 
                 val nowUs = System.nanoTime() / 1_000L
                 val audioFrame = OsrProtocol.encodePcmAudioFrame(
                     streamId = streamId,
                     mediaTimeUs = nowUs,
-                    frameSequence = frameSequence++,
-                    sampleRateHz = sampleRate,
-                    channels = 1,
-                    frameDurationUs = 10_000,
-                    pcmPayload = if (read == payload.size) payload else payload.copyOf(read),
+                    frameSequence = frameSequence,
+                    sampleRateHz = spec.sampleRateHz,
+                    channels = spec.channels,
+                    frameDurationUs = spec.frameDurationUs,
+                    pcmPayload = payload,
                 )
                 val audioPacket = OsrProtocol.encodePacket(
                     OsrProtocol.KIND_AUDIO,
@@ -145,36 +155,46 @@ class PcmAudioSender(
                     audioFrame,
                 )
 
-                val command = OsrProtocol.VolumeCommand(
-                    streamId = streamId,
-                    epoch = epoch,
-                    sequence = volumeSequence++,
-                    gainPpm = gainPpm.get(),
-                    muted = false,
-                    targetMediaTimeUs = 0,
-                )
-                val volumePayload = OsrProtocol.encodeVolumeCommand(command)
-                val volumePacket = OsrProtocol.encodePacket(
-                    OsrProtocol.KIND_VOLUME_COMMAND,
-                    packetSequence++,
-                    volumePayload,
-                )
+                val currentVolume = deviceVolumePpm.get()
+                val sendVolume = currentVolume != lastSentVolume ||
+                    frameSequence % VOLUME_HEARTBEAT_FRAMES == 1L
+                val volumePacket = if (sendVolume) {
+                    val command = OsrProtocol.VolumeCommand(
+                        streamId = streamId,
+                        epoch = epoch,
+                        sequence = volumeSequence++,
+                        gainPpm = currentVolume,
+                        muted = currentVolume == 0,
+                        targetMediaTimeUs = 0,
+                    )
+                    lastSentVolume = currentVolume
+                    OsrProtocol.encodePacket(
+                        OsrProtocol.KIND_DEVICE_VOLUME_COMMAND,
+                        packetSequence++,
+                        OsrProtocol.encodeVolumeCommand(command),
+                    )
+                } else {
+                    null
+                }
 
                 var failed = 0
                 for (target in targets) {
                     runCatching {
                         socket.send(DatagramPacket(audioPacket, audioPacket.size, target))
-                        socket.send(DatagramPacket(volumePacket, volumePacket.size, target))
+                        if (volumePacket != null) {
+                            socket.send(DatagramPacket(volumePacket, volumePacket.size, target))
+                        }
                     }.onFailure {
                         failed++
                     }
                 }
 
+                frameSequence++
                 statusCounter++
-                if (statusCounter % 100L == 0L || failed > 0) {
+                if (statusCounter % framesPerStatus == 0L || failed > 0) {
                     status(
-                        "Fan-out ${captureSource.label()} targets=${targets.size} " +
-                            "failed=$failed volume=${gainPpm.get() / 10_000}%",
+                        "${qualityProfile.displayName} fan-out · ${targets.size} device(s) · " +
+                            "volume ${currentVolume / 10_000}% · failed $failed",
                     )
                 }
             }
@@ -185,33 +205,78 @@ class PcmAudioSender(
         }
     }
 
-    private fun createAudioRecord(
-        sampleRate: Int,
-        channelConfig: Int,
-        audioFormat: Int,
-        recordBufferSize: Int,
-    ): AudioRecord {
+    private fun readFullFrame(recorder: AudioRecord, buffer: ByteArray): Boolean {
+        var offset = 0
+        while (running.get() && offset < buffer.size) {
+            val read = recorder.read(buffer, offset, buffer.size - offset, AudioRecord.READ_BLOCKING)
+            when {
+                read > 0 -> offset += read
+                read == 0 -> continue
+                else -> error("AudioRecord read failed ($read)")
+            }
+        }
+        return offset == buffer.size
+    }
+
+    private fun createCaptureSession(): CaptureSession? {
+        val requested = CaptureSpec(
+            sampleRateHz = qualityProfile.sampleRateHz,
+            channels = qualityProfile.requestedChannels,
+            frameDurationUs = qualityProfile.frameDurationUs,
+        )
+        val candidates = buildList {
+            add(requested)
+            if (requested.channels == 2) add(requested.copy(channels = 1))
+            if (requested.sampleRateHz != 48_000) {
+                add(requested.copy(sampleRateHz = 48_000, channels = 1))
+            }
+        }.distinct()
+
+        for (spec in candidates) {
+            val minBuffer = AudioRecord.getMinBufferSize(
+                spec.sampleRateHz,
+                spec.inputChannelMask,
+                AudioFormat.ENCODING_PCM_16BIT,
+            )
+            if (minBuffer <= 0 || spec.frameBytes <= 0) continue
+            val bufferSize = maxOf(minBuffer, spec.frameBytes * 4)
+            val recorder = runCatching { createAudioRecord(spec, bufferSize) }.getOrNull() ?: continue
+            if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                if (spec != requested) {
+                    status(
+                        "${qualityProfile.displayName} capture fallback: " +
+                            "${spec.sampleRateHz / 1_000} kHz ${if (spec.channels == 2) "stereo" else "mono"}",
+                    )
+                }
+                return CaptureSession(recorder, spec)
+            }
+            recorder.release()
+        }
+        return null
+    }
+
+    private fun createAudioRecord(spec: CaptureSpec, bufferSize: Int): AudioRecord {
         return when (val source = captureSource) {
             CaptureSource.Microphone -> AudioRecord(
                 MediaRecorder.AudioSource.MIC,
-                sampleRate,
-                channelConfig,
-                audioFormat,
-                recordBufferSize,
+                spec.sampleRateHz,
+                spec.inputChannelMask,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
             )
 
             is CaptureSource.Playback -> createPlaybackAudioRecord(
-                source.mediaProjection,
-                sampleRate,
-                recordBufferSize,
+                mediaProjection = source.mediaProjection,
+                spec = spec,
+                bufferSize = bufferSize,
             )
         }
     }
 
     private fun createPlaybackAudioRecord(
         mediaProjection: MediaProjection,
-        sampleRate: Int,
-        recordBufferSize: Int,
+        spec: CaptureSpec,
+        bufferSize: Int,
     ): AudioRecord {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             error("Device playback capture requires Android 10+")
@@ -222,28 +287,22 @@ class PcmAudioSender(
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
             .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
             .build()
-
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-            .setSampleRate(sampleRate)
-            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+            .setSampleRate(spec.sampleRateHz)
+            .setChannelMask(spec.inputChannelMask)
             .build()
 
         return AudioRecord.Builder()
             .setAudioFormat(format)
-            .setBufferSizeInBytes(recordBufferSize)
+            .setBufferSizeInBytes(bufferSize)
             .setAudioPlaybackCaptureConfig(playbackConfig)
             .build()
     }
 
-    private fun CaptureSource.label(): String {
-        return when (this) {
-            CaptureSource.Microphone -> "microphone"
-            is CaptureSource.Playback -> "device playback"
-        }
-    }
-
     companion object {
+        private const val VOLUME_HEARTBEAT_FRAMES = 50L
+
         fun parseTargets(raw: String, defaultPort: Int): List<InetSocketAddress> {
             return raw
                 .split(',', ';', '\n')
@@ -254,12 +313,13 @@ class PcmAudioSender(
                     val port: Int
                     val lastColon = value.lastIndexOf(':')
                     if (lastColon > 0 && lastColon < value.lastIndex - 1) {
-                        host = value.substring(0, lastColon).trim()
+                        host = value.substring(0, lastColon).trim().removeSurrounding("[", "]")
                         port = value.substring(lastColon + 1).trim().toIntOrNull() ?: return@mapNotNull null
                     } else {
-                        host = value
+                        host = value.removeSurrounding("[", "]")
                         port = defaultPort
                     }
+                    if (port !in 1..65_535) return@mapNotNull null
                     InetSocketAddress(host, port)
                 }
                 .distinctBy { "${it.hostString}:${it.port}" }

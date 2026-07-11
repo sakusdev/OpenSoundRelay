@@ -242,9 +242,13 @@ fn run_receiver_worker(
             Ok(Some(IncomingPacket::Audio { from, frame, .. })) => {
                 if frame.header.codec == AudioCodec::Pcm
                     && frame.header.sample_format == SampleFormat::S16Le
-                    && frame.header.channels == 1
+                    && (frame.header.channels == 1 || frame.header.channels == 2)
                 {
-                    output.push_pcm_s16le_mono(&frame.payload);
+                    output.push_pcm_s16le(
+                        &frame.payload,
+                        frame.header.sample_rate_hz,
+                        frame.header.channels,
+                    );
                 }
                 let _ = event_tx.send(WorkerEvent::Packet(format!(
                     "audio from={from} seq={} bytes={} codec={:?}",
@@ -256,6 +260,12 @@ fn run_receiver_worker(
             Ok(Some(IncomingPacket::VolumeCommand { from, command, .. })) => {
                 let _ = event_tx.send(WorkerEvent::Packet(format!(
                     "volume from={from} stream={} seq={} gain={}ppm",
+                    command.stream_id, command.sequence, command.gain_ppm
+                )));
+            }
+            Ok(Some(IncomingPacket::DeviceVolumeCommand { from, command, .. })) => {
+                let _ = event_tx.send(WorkerEvent::Packet(format!(
+                    "native volume from={from} stream={} seq={} volume={}ppm",
                     command.stream_id, command.sequence, command.gain_ppm
                 )));
             }

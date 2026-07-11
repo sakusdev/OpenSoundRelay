@@ -22,15 +22,27 @@ class AudioRelayService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sender: PcmAudioSender? = null
     private var generation = 0L
-    private var gainPpm = 1_000_000
+    private var deviceVolumePpm = NativeVolumeController.ONE_MILLION
     private var notificationText = "Starting device audio relay"
+    private lateinit var nativeVolume: NativeVolumeController
+
+    override fun onCreate() {
+        super.onCreate()
+        nativeVolume = NativeVolumeController(this)
+        nativeVolume.start { value ->
+            deviceVolumePpm = value
+            sender?.setDeviceVolumePpm(value)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_PLAYBACK -> startPlayback(intent)
-            ACTION_SET_GAIN -> setGain(intent.getIntExtra(EXTRA_GAIN_PPM, gainPpm))
+            ACTION_SET_DEVICE_VOLUME -> setDeviceVolume(
+                intent.getIntExtra(EXTRA_DEVICE_VOLUME_PPM, deviceVolumePpm),
+            )
             ACTION_STOP -> stopRelay("Sender stopped")
             else -> if (sender == null) stopSelf(startId)
         }
@@ -42,6 +54,7 @@ class AudioRelayService : Service() {
         val activeSender = sender
         sender = null
         activeSender?.stop()
+        nativeVolume.stop()
         sessionActive = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
@@ -65,7 +78,11 @@ class AudioRelayService : Service() {
         sender = null
         previousSender?.stop()
 
-        gainPpm = intent.getIntExtra(EXTRA_GAIN_PPM, 1_000_000).coerceIn(0, 2_000_000)
+        deviceVolumePpm = intent.getIntExtra(
+            EXTRA_DEVICE_VOLUME_PPM,
+            nativeVolume.currentPpm(),
+        ).coerceIn(0, NativeVolumeController.ONE_MILLION)
+        val qualityProfile = AudioQualityProfile.fromId(intent.getStringExtra(EXTRA_QUALITY_PROFILE))
 
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val mediaProjection = try {
@@ -83,17 +100,18 @@ class AudioRelayService : Service() {
         val nextSender = PcmAudioSender(
             targets = targets,
             captureSource = PcmAudioSender.CaptureSource.Playback(mediaProjection),
+            qualityProfile = qualityProfile,
             status = { message -> onSenderStatus(currentGeneration, message) },
             onStopped = { onSenderStopped(currentGeneration) },
         )
         sender = nextSender
-        nextSender.setGainPpm(gainPpm)
+        nextSender.setDeviceVolumePpm(deviceVolumePpm)
         nextSender.start()
     }
 
-    private fun setGain(value: Int) {
-        gainPpm = value.coerceIn(0, 2_000_000)
-        sender?.setGainPpm(gainPpm)
+    private fun setDeviceVolume(value: Int) {
+        deviceVolumePpm = value.coerceIn(0, NativeVolumeController.ONE_MILLION)
+        sender?.setDeviceVolumePpm(deviceVolumePpm)
     }
 
     private fun onSenderStatus(senderGeneration: Long, message: String) {
@@ -219,11 +237,12 @@ class AudioRelayService : Service() {
 
     companion object {
         private const val ACTION_START_PLAYBACK = "dev.sakus.osr.action.START_PLAYBACK"
-        private const val ACTION_SET_GAIN = "dev.sakus.osr.action.SET_GAIN"
+        private const val ACTION_SET_DEVICE_VOLUME = "dev.sakus.osr.action.SET_DEVICE_VOLUME"
         private const val ACTION_STOP = "dev.sakus.osr.action.STOP"
         private const val EXTRA_TARGET_HOSTS = "target_hosts"
         private const val EXTRA_TARGET_PORTS = "target_ports"
-        private const val EXTRA_GAIN_PPM = "gain_ppm"
+        private const val EXTRA_DEVICE_VOLUME_PPM = "device_volume_ppm"
+        private const val EXTRA_QUALITY_PROFILE = "quality_profile"
         private const val EXTRA_PROJECTION_RESULT_CODE = "projection_result_code"
         private const val EXTRA_PROJECTION_DATA = "projection_data"
         private const val CHANNEL_ID = "osr_audio_relay"
@@ -241,6 +260,7 @@ class AudioRelayService : Service() {
             gainPpm: Int,
             projectionResultCode: Int,
             projectionData: Intent,
+            qualityProfile: AudioQualityProfile = AudioQualityProfile.Balanced,
         ) {
             val intent = Intent(context, AudioRelayService::class.java).apply {
                 action = ACTION_START_PLAYBACK
@@ -252,7 +272,11 @@ class AudioRelayService : Service() {
                     EXTRA_TARGET_PORTS,
                     ArrayList(targets.map { it.port }),
                 )
-                putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+                putExtra(
+                    EXTRA_DEVICE_VOLUME_PPM,
+                    gainPpm.coerceIn(0, NativeVolumeController.ONE_MILLION),
+                )
+                putExtra(EXTRA_QUALITY_PROFILE, qualityProfile.id)
                 putExtra(EXTRA_PROJECTION_RESULT_CODE, projectionResultCode)
                 putExtra(EXTRA_PROJECTION_DATA, projectionData)
             }
@@ -268,14 +292,20 @@ class AudioRelayService : Service() {
             }
         }
 
-        fun updateGain(context: Context, gainPpm: Int) {
+        fun updateDeviceVolume(context: Context, volumePpm: Int) {
             if (!sessionActive) return
             val intent = Intent(context, AudioRelayService::class.java).apply {
-                action = ACTION_SET_GAIN
-                putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+                action = ACTION_SET_DEVICE_VOLUME
+                putExtra(
+                    EXTRA_DEVICE_VOLUME_PPM,
+                    volumePpm.coerceIn(0, NativeVolumeController.ONE_MILLION),
+                )
             }
             context.startService(intent)
         }
+
+        @Deprecated("Use updateDeviceVolume")
+        fun updateGain(context: Context, gainPpm: Int) = updateDeviceVolume(context, gainPpm)
 
         fun stop(context: Context) {
             if (!sessionActive) return

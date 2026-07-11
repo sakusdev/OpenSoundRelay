@@ -17,6 +17,7 @@ pub enum PacketKind {
     Audio = 2,
     VolumeCommand = 3,
     TimeSync = 4,
+    DeviceVolumeCommand = 5,
 }
 
 impl PacketKind {
@@ -26,6 +27,7 @@ impl PacketKind {
             2 => Some(Self::Audio),
             3 => Some(Self::VolumeCommand),
             4 => Some(Self::TimeSync),
+            5 => Some(Self::DeviceVolumeCommand),
             _ => None,
         }
     }

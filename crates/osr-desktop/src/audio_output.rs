@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 pub struct PcmAudioOutput {
     queue: Arc<Mutex<VecDeque<i16>>>,
+    output_sample_rate: u32,
     _stream: Stream,
 }
 
@@ -66,19 +67,47 @@ impl PcmAudioOutput {
 
         Ok(Self {
             queue,
+            output_sample_rate: config.sample_rate.0,
             _stream: stream,
         })
     }
 
-    pub fn push_pcm_s16le_mono(&self, data: &[u8]) {
+    pub fn push_pcm_s16le(&self, data: &[u8], input_sample_rate: u32, input_channels: u8) {
+        if input_sample_rate == 0 || !(input_channels == 1 || input_channels == 2) {
+            return;
+        }
+
+        let channels = input_channels as usize;
+        let samples: Vec<i16> = data
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        let mono: Vec<i16> = samples
+            .chunks_exact(channels)
+            .map(|frame| {
+                if channels == 1 {
+                    frame[0]
+                } else {
+                    ((frame[0] as i32 + frame[1] as i32) / 2) as i16
+                }
+            })
+            .collect();
+        if mono.is_empty() {
+            return;
+        }
+
+        let output_frames = ((mono.len() as u64 * self.output_sample_rate as u64)
+            / input_sample_rate as u64)
+            .max(1) as usize;
         let mut queue = match self.queue.lock() {
             Ok(value) => value,
             Err(_) => return,
         };
 
-        for chunk in data.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            queue.push_back(sample);
+        for output_index in 0..output_frames {
+            let source_index = ((output_index as u64 * input_sample_rate as u64)
+                / self.output_sample_rate as u64) as usize;
+            queue.push_back(mono[source_index.min(mono.len() - 1)]);
         }
 
         let max_samples = 48_000usize;

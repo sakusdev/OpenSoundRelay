@@ -154,6 +154,11 @@ pub enum IncomingPacket {
         packet_sequence: u64,
         command: VolumeState,
     },
+    DeviceVolumeCommand {
+        from: SocketAddr,
+        packet_sequence: u64,
+        command: VolumeState,
+    },
     Other {
         from: SocketAddr,
         kind: PacketKind,
@@ -234,6 +239,14 @@ impl UdpEndpoint {
         self.send_packet_to_targets(targets, PacketKind::VolumeCommand, &command.encode())
     }
 
+    pub fn send_device_volume_command_to_targets(
+        &mut self,
+        targets: &TargetList,
+        command: VolumeState,
+    ) -> FanoutReport {
+        self.send_packet_to_targets(targets, PacketKind::DeviceVolumeCommand, &command.encode())
+    }
+
     pub fn send_packet<A: ToSocketAddrs>(
         &mut self,
         target: A,
@@ -309,6 +322,16 @@ impl UdpEndpoint {
                     command,
                 }))
             }
+            PacketKind::DeviceVolumeCommand => {
+                let Some(command) = VolumeState::decode(packet.payload) else {
+                    return Ok(None);
+                };
+                Ok(Some(IncomingPacket::DeviceVolumeCommand {
+                    from,
+                    packet_sequence: packet.header.sequence,
+                    command,
+                }))
+            }
             kind => Ok(Some(IncomingPacket::Other {
                 from,
                 kind,
@@ -322,6 +345,7 @@ impl UdpEndpoint {
 pub struct StreamStats {
     pub received_audio_frames: u64,
     pub received_volume_commands: u64,
+    pub received_device_volume_commands: u64,
     pub dropped_audio_frames: u64,
     pub last_audio_sequence: u64,
 }
@@ -341,6 +365,9 @@ impl StreamStats {
             }
             IncomingPacket::VolumeCommand { .. } => {
                 self.received_volume_commands += 1;
+            }
+            IncomingPacket::DeviceVolumeCommand { .. } => {
+                self.received_device_volume_commands += 1;
             }
             IncomingPacket::Other { .. } => {}
         }

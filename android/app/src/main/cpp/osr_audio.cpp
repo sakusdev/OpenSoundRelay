@@ -2,7 +2,7 @@
 
 #include <aaudio/AAudio.h>
 #include <jni.h>
-#include <opus/opus.h>
+#include <opus.h>
 
 #include <algorithm>
 #include <atomic>

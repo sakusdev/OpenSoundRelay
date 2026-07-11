@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/release.yml'
+      - 'android/**'
 
 permissions:
   contents: write
@@ -32,16 +33,26 @@ jobs:
       - name: Install native audio toolchain
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'ndk;27.2.12479018' 'cmake;3.22.1'
+          sdkmanager 'ndk;27.2.12479018' 'cmake;3.22.1' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
+      - name: Set monotonically increasing Android version
+        run: echo "OSR_VERSION_CODE=$((400000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - name: Build Android preview APK
         run: gradle :android:app:assembleDebug
-      - name: Prepare release asset
+      - name: Sign with stable public preview key
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk OpenSoundRelay-android-preview.apk
-          sha256sum OpenSoundRelay-android-preview.apk > OpenSoundRelay-android-preview.apk.sha256
+          curl -fsSL 'https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security/testkey.pk8?format=TEXT' | base64 --decode > testkey.pk8
+          curl -fsSL 'https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security/testkey.x509.pem?format=TEXT' | base64 --decode > testkey.x509.pem
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --key testkey.pk8 \
+            --cert testkey.x509.pem \
+            --out OpenSoundRelay-android-preview.apk \
+            android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose OpenSoundRelay-android-preview.apk
+      - name: Prepare release checksum
+        run: sha256sum OpenSoundRelay-android-preview.apk > OpenSoundRelay-android-preview.apk.sha256
       - name: Create or update Android preview release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,5 +69,5 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "$RELEASE_NAME" \
               --prerelease \
-              --notes $'Android-only preview build.\n\nIncludes 5 ms Opus, AAudio low-latency playback, 8–512 kbps bitrate control, LAN discovery, native-volume sync, and the new three-tab UI.\n\nDesktop builds are intentionally withheld until their implementation and debugging are complete.'
+              --notes $'Android-only preview build.\n\nIncludes 5 ms Opus, AAudio low-latency playback, 8–512 kbps bitrate control, LAN discovery, native-volume sync, and the three-tab UI.\n\nThis preview uses the public AOSP test key so future preview APKs can be installed as updates. The first transition from older randomly signed debug builds requires uninstalling the old app once. Do not treat this preview signing key as production security.\n\nDesktop builds are intentionally withheld until their implementation and debugging are complete.'
           fi

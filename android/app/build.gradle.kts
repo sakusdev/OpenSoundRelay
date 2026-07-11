@@ -14,7 +14,7 @@ android {
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "dev.sakus.osr"
+        applicationId = "org.sakus.opensoundrelay"
         minSdk = 26
         targetSdk = 35
         versionCode = previewVersionCode

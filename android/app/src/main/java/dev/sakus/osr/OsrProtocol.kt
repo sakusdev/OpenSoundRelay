@@ -8,11 +8,15 @@ import java.nio.ByteOrder
 object OsrProtocol {
     private val magic = byteArrayOf('O'.code.toByte(), 'S'.code.toByte(), 'R'.code.toByte(), '1'.code.toByte())
     const val PROTOCOL_VERSION: Short = 1
+    const val KIND_HELLO: Short = 1
     const val KIND_AUDIO: Short = 2
     const val KIND_VOLUME_COMMAND: Short = 3
+    const val KIND_TIME_SYNC: Short = 4
+    const val KIND_DEVICE_VOLUME: Short = 5
     const val PACKET_HEADER_LEN = 28
     const val AUDIO_HEADER_LEN = 36
     const val VOLUME_COMMAND_LEN = 40
+    const val DEVICE_VOLUME_COMMAND_LEN = 24
 
     data class Packet(
         val kind: Short,
@@ -40,6 +44,13 @@ object OsrProtocol {
         val gainPpm: Int,
         val muted: Boolean,
         val targetMediaTimeUs: Long,
+    )
+
+    data class DeviceVolumeCommand(
+        val epoch: Long,
+        val sequence: Long,
+        val volumePercent: Int,
+        val muted: Boolean,
     )
 
     fun encodePacket(kind: Short, sequence: Long, payload: ByteArray, flags: Short = 0): ByteArray {
@@ -90,9 +101,9 @@ object OsrProtocol {
         buffer.putLong(frameSequence)
         buffer.putInt(sampleRateHz)
         buffer.put(channels.toByte())
-        buffer.put(1.toByte()) // codec: PCM
-        buffer.put(1.toByte()) // sample format: S16LE
-        buffer.put(0.toByte()) // reserved
+        buffer.put(1.toByte())
+        buffer.put(1.toByte())
+        buffer.put(0.toByte())
         buffer.putInt(frameDurationUs)
         buffer.putInt(pcmPayload.size)
         buffer.put(pcmPayload)
@@ -109,7 +120,7 @@ object OsrProtocol {
         val channels = buffer.get().toInt() and 0xff
         val codec = buffer.get().toInt() and 0xff
         val sampleFormat = buffer.get().toInt() and 0xff
-        buffer.get() // reserved
+        buffer.get()
         val frameDurationUs = buffer.int
         val payloadLen = buffer.int
         if (payloadLen < 0 || payloadLen != payload.size - AUDIO_HEADER_LEN) return null
@@ -150,5 +161,25 @@ object OsrProtocol {
         buffer.position(32)
         val targetMediaTimeUs = buffer.long
         return VolumeCommand(streamId, epoch, sequence, gainPpm, muted, targetMediaTimeUs)
+    }
+
+    fun encodeDeviceVolumeCommand(command: DeviceVolumeCommand): ByteArray {
+        val buffer = ByteBuffer.allocate(DEVICE_VOLUME_COMMAND_LEN).order(ByteOrder.BIG_ENDIAN)
+        buffer.putLong(command.epoch)
+        buffer.putLong(command.sequence)
+        buffer.putShort(command.volumePercent.coerceIn(0, 100).toShort())
+        buffer.put((if (command.muted) 1 else 0).toByte())
+        buffer.put(ByteArray(5))
+        return buffer.array()
+    }
+
+    fun decodeDeviceVolumeCommand(payload: ByteArray): DeviceVolumeCommand? {
+        if (payload.size != DEVICE_VOLUME_COMMAND_LEN) return null
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
+        val epoch = buffer.long
+        val sequence = buffer.long
+        val volumePercent = (buffer.short.toInt() and 0xffff).coerceIn(0, 100)
+        val muted = buffer.get().toInt() != 0
+        return DeviceVolumeCommand(epoch, sequence, volumePercent, muted)
     }
 }

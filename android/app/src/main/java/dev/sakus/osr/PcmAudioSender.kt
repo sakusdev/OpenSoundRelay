@@ -23,6 +23,7 @@ class PcmAudioSender(
     private val captureSource: CaptureSource,
     private val status: (String) -> Unit,
     private val onStopped: () -> Unit = {},
+    private val nativeVolumeProvider: (() -> NativeVolumeState?)? = null,
 ) {
     sealed class CaptureSource {
         data object Microphone : CaptureSource()
@@ -31,10 +32,15 @@ class PcmAudioSender(
 
     private val running = AtomicBoolean(false)
     private val gainPpm = AtomicInteger(1_000_000)
+    private val nativeVolumeSyncEnabled = AtomicBoolean(false)
     private var worker: Thread? = null
 
     fun setGainPpm(value: Int) {
         gainPpm.set(value.coerceIn(0, 2_000_000))
+    }
+
+    fun setNativeVolumeSyncEnabled(enabled: Boolean) {
+        nativeVolumeSyncEnabled.set(enabled)
     }
 
     fun start() {
@@ -101,15 +107,16 @@ class PcmAudioSender(
             return
         }
 
-        val frameBytes = sampleRate / 100 * 2 // 10ms, mono, s16
+        val frameBytes = sampleRate / 100 * 2
         val recordBufferSize = maxOf(minBuffer, frameBytes * 4)
         val payload = ByteArray(frameBytes)
         var packetSequence = 1L
         var frameSequence = 1L
         var volumeSequence = 1L
+        var deviceVolumeSequence = 1L
         var statusCounter = 0L
         val streamId = 1
-        val epoch = 1L
+        val epoch = System.currentTimeMillis().coerceAtLeast(1L)
 
         val recorder = try {
             createAudioRecord(sampleRate, channelConfig, audioFormat, recordBufferSize)
@@ -133,7 +140,7 @@ class PcmAudioSender(
                 val audioFrame = OsrProtocol.encodePcmAudioFrame(
                     streamId = streamId,
                     mediaTimeUs = nowUs,
-                    frameSequence = frameSequence++,
+                    frameSequence = frameSequence,
                     sampleRateHz = sampleRate,
                     channels = 1,
                     frameDurationUs = 10_000,
@@ -145,36 +152,69 @@ class PcmAudioSender(
                     audioFrame,
                 )
 
-                val command = OsrProtocol.VolumeCommand(
-                    streamId = streamId,
-                    epoch = epoch,
-                    sequence = volumeSequence++,
-                    gainPpm = gainPpm.get(),
-                    muted = false,
-                    targetMediaTimeUs = 0,
-                )
-                val volumePayload = OsrProtocol.encodeVolumeCommand(command)
-                val volumePacket = OsrProtocol.encodePacket(
-                    OsrProtocol.KIND_VOLUME_COMMAND,
-                    packetSequence++,
-                    volumePayload,
-                )
+                val controlPackets = mutableListOf<ByteArray>()
+                if (frameSequence % 10L == 0L) {
+                    val command = OsrProtocol.VolumeCommand(
+                        streamId = streamId,
+                        epoch = epoch,
+                        sequence = volumeSequence++,
+                        gainPpm = gainPpm.get(),
+                        muted = false,
+                        targetMediaTimeUs = 0,
+                    )
+                    controlPackets += OsrProtocol.encodePacket(
+                        OsrProtocol.KIND_VOLUME_COMMAND,
+                        packetSequence++,
+                        OsrProtocol.encodeVolumeCommand(command),
+                    )
+
+                    if (nativeVolumeSyncEnabled.get()) {
+                        val native = runCatching { nativeVolumeProvider?.invoke() }.getOrNull()
+                        if (native != null) {
+                            val deviceCommand = OsrProtocol.DeviceVolumeCommand(
+                                epoch = epoch,
+                                sequence = deviceVolumeSequence++,
+                                volumePercent = native.percent,
+                                muted = native.muted,
+                            )
+                            controlPackets += OsrProtocol.encodePacket(
+                                OsrProtocol.KIND_DEVICE_VOLUME,
+                                packetSequence++,
+                                OsrProtocol.encodeDeviceVolumeCommand(deviceCommand),
+                            )
+                        }
+                    }
+                }
 
                 var failed = 0
                 for (target in targets) {
                     runCatching {
                         socket.send(DatagramPacket(audioPacket, audioPacket.size, target))
-                        socket.send(DatagramPacket(volumePacket, volumePacket.size, target))
+                        for (control in controlPackets) {
+                            socket.send(DatagramPacket(control, control.size, target))
+                        }
                     }.onFailure {
                         failed++
                     }
                 }
 
+                frameSequence++
                 statusCounter++
                 if (statusCounter % 100L == 0L || failed > 0) {
+                    val native = if (nativeVolumeSyncEnabled.get()) {
+                        runCatching { nativeVolumeProvider?.invoke() }.getOrNull()
+                    } else {
+                        null
+                    }
                     status(
-                        "Fan-out ${captureSource.label()} targets=${targets.size} " +
-                            "failed=$failed volume=${gainPpm.get() / 10_000}%",
+                        buildString {
+                            append("Fan-out ${captureSource.label()} targets=${targets.size} ")
+                            append("failed=$failed stream=${gainPpm.get() / 10_000}%")
+                            if (native != null) {
+                                append(" native=${native.percent}%")
+                                if (native.muted) append(" muted")
+                            }
+                        },
                     )
                 }
             }
@@ -260,6 +300,7 @@ class PcmAudioSender(
                         host = value
                         port = defaultPort
                     }
+                    if (port !in 1..65_535) return@mapNotNull null
                     InetSocketAddress(host, port)
                 }
                 .distinctBy { "${it.hostString}:${it.port}" }

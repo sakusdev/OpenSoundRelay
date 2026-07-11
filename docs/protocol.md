@@ -32,10 +32,31 @@ Header length: 28 bytes.
 
 | Value | Name | Purpose |
 |---:|---|---|
-| 1 | Hello | peer capability announcement |
+| 1 | Hello | LAN discovery probe/announcement |
 | 2 | Audio | audio frame |
-| 3 | VolumeCommand | parent-authoritative stream volume |
+| 3 | VolumeCommand | parent-authoritative OSR stream gain |
 | 4 | TimeSync | clock/media timeline synchronization |
+| 5 | DeviceVolume | parent-authoritative native media/output volume |
+
+Unknown packet kinds must be ignored safely by a receiver.
+
+## Hello discovery payload
+
+Length: 20 bytes plus UTF-8 name.
+
+```text
+0       discovery wire version: u8, currently 1
+1       message type: u8, 1=probe, 2=announcement
+2       role: u8, 0=idle, 1=sender, 2=receiver, 3=duplex
+3       reserved
+4..8    capability flags: u32
+8..10   advertised audio UDP port: u16
+10..12  device name byte length: u16
+12..20  scan nonce: u64
+20..    UTF-8 device name, maximum 96 bytes
+```
+
+An announcement echoes the probe nonce. See [lan-discovery.md](./lan-discovery.md).
 
 ## Audio payload
 
@@ -72,11 +93,11 @@ AudioFrame header length: 36 bytes.
 | 2 | F32LE | 32-bit little-endian float PCM |
 | 255 | Encoded | compressed codec payload, for example Opus |
 
-v0.2 uses `codec=1` and `sample_format=1` for Android-to-Android PCM S16LE prototyping.
-
-v0.3 should keep the same `AudioFrame` envelope and switch to `codec=2` and `sample_format=255` for Opus payloads.
+The current prototype uses `codec=1` and `sample_format=1` for PCM S16LE. A future Opus implementation should keep the same `AudioFrame` envelope and use `codec=2`, `sample_format=255`.
 
 ## VolumeCommand payload
+
+`VolumeCommand` affects only the gain inside the OSR stream.
 
 Length: 40 bytes.
 
@@ -90,15 +111,25 @@ Length: 40 bytes.
 32..40  target_media_time_us: u64
 ```
 
-## Volume conflict rules
+## DeviceVolume payload
 
-A child accepts a new `VolumeCommand` when:
+`DeviceVolume` asks a platform client to update its native media/output volume. Receivers may refuse or disable this operation because platform policy and user preference take precedence.
+
+Length: 24 bytes.
 
 ```text
-candidate.stream_id == current.stream_id
+0..8    epoch: u64
+8..16   sequence: u64
+16..18  volume_percent: u16, clamped to 0..100
+18      muted: u8, 0=false, non-zero=true
+19..24  reserved, must be zero in v1
 ```
 
-and:
+Stream gain and native volume are deliberately different packet kinds. A client can support either or both.
+
+## Conflict rules
+
+A child accepts a newer command when:
 
 ```text
 candidate.epoch > current.epoch
@@ -110,7 +141,9 @@ or:
 candidate.epoch == current.epoch && candidate.sequence > current.sequence
 ```
 
-Otherwise, it must ignore the command as stale or unrelated to the current stream.
+For `VolumeCommand`, a different non-zero `stream_id` is also rejected. Stale commands must be ignored.
+
+A sender should choose a new non-zero epoch for each session so sequence numbers can restart safely.
 
 ## Gain math
 
@@ -123,8 +156,8 @@ else:
     output = clamp_i16(sample * min(gain_ppm, 2_000_000) / 1_000_000)
 ```
 
-This integer operation is the normative behavior for exact cross-platform OSR stream volume synchronization.
+This integer operation is the normative behavior for exact cross-platform OSR stream-gain synchronization.
 
 ## Why fixed-point?
 
-Floating-point behavior is usually close across platforms, but OSR wants the volume state and gain operation to be reproducible in Android, iOS, desktop, and Web implementations. Integer fixed-point values avoid unnecessary differences.
+Floating-point behavior is usually close across platforms, but OSR wants stream-gain state and sample math to be reproducible in Android, iOS, desktop, and Web implementations. Integer fixed-point values avoid unnecessary differences.

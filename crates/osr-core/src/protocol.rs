@@ -13,10 +13,14 @@ pub const PROTOCOL_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PacketKind {
+    /// Discovery probe/announcement payload.
     Hello = 1,
     Audio = 2,
+    /// Gain applied inside the OSR stream.
     VolumeCommand = 3,
     TimeSync = 4,
+    /// Native media/output volume synchronization.
+    DeviceVolume = 5,
 }
 
 impl PacketKind {
@@ -26,6 +30,7 @@ impl PacketKind {
             2 => Some(Self::Audio),
             3 => Some(Self::VolumeCommand),
             4 => Some(Self::TimeSync),
+            5 => Some(Self::DeviceVolume),
             _ => None,
         }
     }

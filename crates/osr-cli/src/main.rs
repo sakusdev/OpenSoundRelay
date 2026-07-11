@@ -104,6 +104,12 @@ fn run_child(args: &[String]) -> Result<(), String> {
                     current.muted
                 );
             }
+            IncomingPacket::DeviceVolume { from, command, .. } => {
+                println!(
+                    "native-volume from={from} epoch={} seq={} percent={} muted={}",
+                    command.epoch, command.sequence, command.volume_percent, command.muted
+                );
+            }
             IncomingPacket::Audio { from, frame, .. } => {
                 println!(
                     "audio from={from} frame_seq={} payload={} codec={:?}",

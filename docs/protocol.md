@@ -80,20 +80,22 @@ AudioFrame header length: 36 bytes.
 
 ### Codec values
 
-| Value | Name | Purpose |
+| Value | Name | Payload |
 |---:|---|---|
-| 1 | PCM | raw PCM prototype frames |
-| 2 | Opus | future high-quality low-latency frames |
+| 1 | PCM S16LE | raw signed 16-bit little-endian samples |
+| 2 | Opus | one self-contained Opus packet |
 
 ### Sample format values
 
 | Value | Name | Purpose |
 |---:|---|---|
+| 0 | None/encoded | sample format is defined by the compressed codec |
 | 1 | S16LE | signed 16-bit little-endian PCM |
 | 2 | F32LE | 32-bit little-endian float PCM |
-| 255 | Encoded | compressed codec payload, for example Opus |
 
-The current prototype uses `codec=1` and `sample_format=1` for PCM S16LE. A future Opus implementation should keep the same `AudioFrame` envelope and use `codec=2`, `sample_format=255`.
+Android low-latency sessions use 48 kHz mono, `codec=2`, `sample_format=0`, and 5,000 µs frames. The Opus packet is encoded with `OPUS_APPLICATION_RESTRICTED_LOWDELAY`; bitrate may change between 8,000 and 512,000 bits/s without changing the envelope.
+
+Legacy PCM sessions use `codec=1` and `sample_format=1`. Receivers must ignore codecs they do not implement.
 
 ## VolumeCommand payload
 

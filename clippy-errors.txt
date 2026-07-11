@@ -1,0 +1,5 @@
+crates/osr-net/src/discovery.rs:304:5: warning: consider using `sort_by_key`
+warning: `osr-net` (lib) generated 1 warning (run `cargo clippy --fix --lib -p osr-net -- ` to apply 1 suggestion)
+crates/osr-cli/src/main.rs:94:15: error[E0004]: non-exhaustive patterns: `osr_net::IncomingPacket::DeviceVolume { .. }` not covered: pattern `osr_net::IncomingPacket::DeviceVolume { .. }` not covered
+error: could not compile `osr-cli` (bin "osr-cli" test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

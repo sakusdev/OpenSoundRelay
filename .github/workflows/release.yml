@@ -1,45 +1,26 @@
-name: Release Builds
+name: Android Preview Release
 
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-preview-release
+  cancel-in-progress: true
+
+env:
+  RELEASE_TAG: android-preview-2026-07-11
+  RELEASE_NAME: OpenSoundRelay Android Preview
 
 jobs:
-  rust-desktop:
-    name: Desktop ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: osr-desktop-linux
-            binary: target/release/osr-desktop
-          - os: windows-latest
-            artifact: osr-desktop-windows
-            binary: target/release/osr-desktop.exe
-          - os: macos-latest
-            artifact: osr-desktop-macos
-            binary: target/release/osr-desktop
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libx11-dev libxi-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev
-      - name: Build desktop GUI
-        run: cargo build -p osr-desktop --release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.binary }}
-
   android:
-    name: Android APK
+    name: Build and publish Android APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,12 +29,33 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+      - name: Install native audio toolchain
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'ndk;27.2.12479018' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
-      - name: Build debug APK
+      - name: Build Android preview APK
         run: gradle :android:app:assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: osr-android-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+      - name: Prepare release asset
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk OpenSoundRelay-android-preview.apk
+          sha256sum OpenSoundRelay-android-preview.apk > OpenSoundRelay-android-preview.apk.sha256
+      - name: Create or update Android preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              OpenSoundRelay-android-preview.apk \
+              OpenSoundRelay-android-preview.apk.sha256 \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              OpenSoundRelay-android-preview.apk \
+              OpenSoundRelay-android-preview.apk.sha256 \
+              --target "${GITHUB_SHA}" \
+              --title "$RELEASE_NAME" \
+              --prerelease \
+              --notes $'Android-only preview build.\n\nIncludes 5 ms Opus, AAudio low-latency playback, 8–512 kbps bitrate control, LAN discovery, native-volume sync, and the new three-tab UI.\n\nDesktop builds are intentionally withheld until their implementation and debugging are complete.'

@@ -31,7 +31,7 @@ jobs:
           tail -n 80 android-build.log
           exit $result
       - name: Upload build diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: osr-android-build-log

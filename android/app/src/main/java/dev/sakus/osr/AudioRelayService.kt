@@ -24,6 +24,7 @@ class AudioRelayService : Service() {
     private var sender: PcmAudioSender? = null
     private var generation = 0L
     private var gainPpm = 1_000_000
+    private var bitrateKbps = PcmAudioSender.DEFAULT_BITRATE_KBPS
     private var syncNativeVolume = true
     private var notificationText = "Starting device audio relay"
 
@@ -33,6 +34,7 @@ class AudioRelayService : Service() {
         when (intent?.action) {
             ACTION_START_PLAYBACK -> startPlayback(intent)
             ACTION_SET_GAIN -> setGain(intent.getIntExtra(EXTRA_GAIN_PPM, gainPpm))
+            ACTION_SET_BITRATE -> setBitrate(intent.getIntExtra(EXTRA_BITRATE_KBPS, bitrateKbps))
             ACTION_SET_NATIVE_SYNC -> setNativeSync(
                 intent.getBooleanExtra(EXTRA_SYNC_NATIVE_VOLUME, syncNativeVolume),
             )
@@ -54,7 +56,7 @@ class AudioRelayService : Service() {
 
     private fun startPlayback(intent: Intent) {
         createNotificationChannel()
-        promoteToForeground("Starting device audio relay")
+        promoteToForeground("Starting 5 ms Opus relay")
 
         val targets = readTargets(intent)
         val projectionData = intent.readProjectionData()
@@ -71,6 +73,10 @@ class AudioRelayService : Service() {
         previousSender?.stop()
 
         gainPpm = intent.getIntExtra(EXTRA_GAIN_PPM, 1_000_000).coerceIn(0, 2_000_000)
+        bitrateKbps = intent.getIntExtra(
+            EXTRA_BITRATE_KBPS,
+            PcmAudioSender.DEFAULT_BITRATE_KBPS,
+        ).coerceIn(NativeOpusEncoder.MIN_BITRATE_KBPS, NativeOpusEncoder.MAX_BITRATE_KBPS)
         syncNativeVolume = intent.getBooleanExtra(EXTRA_SYNC_NATIVE_VOLUME, true)
 
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -95,6 +101,7 @@ class AudioRelayService : Service() {
         )
         sender = nextSender
         nextSender.setGainPpm(gainPpm)
+        nextSender.setBitrateKbps(bitrateKbps)
         nextSender.setNativeVolumeSyncEnabled(syncNativeVolume)
         nextSender.start()
     }
@@ -102,6 +109,14 @@ class AudioRelayService : Service() {
     private fun setGain(value: Int) {
         gainPpm = value.coerceIn(0, 2_000_000)
         sender?.setGainPpm(gainPpm)
+    }
+
+    private fun setBitrate(value: Int) {
+        bitrateKbps = value.coerceIn(
+            NativeOpusEncoder.MIN_BITRATE_KBPS,
+            NativeOpusEncoder.MAX_BITRATE_KBPS,
+        )
+        sender?.setBitrateKbps(bitrateKbps)
     }
 
     private fun setNativeSync(value: Boolean) {
@@ -233,11 +248,13 @@ class AudioRelayService : Service() {
     companion object {
         private const val ACTION_START_PLAYBACK = "dev.sakus.osr.action.START_PLAYBACK"
         private const val ACTION_SET_GAIN = "dev.sakus.osr.action.SET_GAIN"
+        private const val ACTION_SET_BITRATE = "dev.sakus.osr.action.SET_BITRATE"
         private const val ACTION_SET_NATIVE_SYNC = "dev.sakus.osr.action.SET_NATIVE_SYNC"
         private const val ACTION_STOP = "dev.sakus.osr.action.STOP"
         private const val EXTRA_TARGET_HOSTS = "target_hosts"
         private const val EXTRA_TARGET_PORTS = "target_ports"
         private const val EXTRA_GAIN_PPM = "gain_ppm"
+        private const val EXTRA_BITRATE_KBPS = "bitrate_kbps"
         private const val EXTRA_SYNC_NATIVE_VOLUME = "sync_native_volume"
         private const val EXTRA_PROJECTION_RESULT_CODE = "projection_result_code"
         private const val EXTRA_PROJECTION_DATA = "projection_data"
@@ -254,6 +271,7 @@ class AudioRelayService : Service() {
             context: Context,
             targets: List<InetSocketAddress>,
             gainPpm: Int,
+            bitrateKbps: Int,
             syncNativeVolume: Boolean,
             projectionResultCode: Int,
             projectionData: Intent,
@@ -269,13 +287,20 @@ class AudioRelayService : Service() {
                     ArrayList(targets.map { it.port }),
                 )
                 putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+                putExtra(
+                    EXTRA_BITRATE_KBPS,
+                    bitrateKbps.coerceIn(
+                        NativeOpusEncoder.MIN_BITRATE_KBPS,
+                        NativeOpusEncoder.MAX_BITRATE_KBPS,
+                    ),
+                )
                 putExtra(EXTRA_SYNC_NATIVE_VOLUME, syncNativeVolume)
                 putExtra(EXTRA_PROJECTION_RESULT_CODE, projectionResultCode)
                 putExtra(EXTRA_PROJECTION_DATA, projectionData)
             }
 
             sessionActive = true
-            latestStatus = "Starting device audio relay"
+            latestStatus = "Starting 5 ms Opus relay"
             try {
                 context.startForegroundService(intent)
             } catch (error: Throwable) {
@@ -290,6 +315,21 @@ class AudioRelayService : Service() {
             val intent = Intent(context, AudioRelayService::class.java).apply {
                 action = ACTION_SET_GAIN
                 putExtra(EXTRA_GAIN_PPM, gainPpm.coerceIn(0, 2_000_000))
+            }
+            context.startService(intent)
+        }
+
+        fun updateBitrate(context: Context, bitrateKbps: Int) {
+            if (!sessionActive) return
+            val intent = Intent(context, AudioRelayService::class.java).apply {
+                action = ACTION_SET_BITRATE
+                putExtra(
+                    EXTRA_BITRATE_KBPS,
+                    bitrateKbps.coerceIn(
+                        NativeOpusEncoder.MIN_BITRATE_KBPS,
+                        NativeOpusEncoder.MAX_BITRATE_KBPS,
+                    ),
+                )
             }
             context.startService(intent)
         }
@@ -311,7 +351,6 @@ class AudioRelayService : Service() {
         }
 
         fun isActive(): Boolean = sessionActive
-
         fun status(): String = latestStatus
     }
 }

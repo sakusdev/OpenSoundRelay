@@ -17,11 +17,26 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+      - name: Install native audio toolchain
+        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
       - name: Build debug APK
-        run: gradle :android:app:assembleDebug
+        shell: bash
+        run: |
+          set +e
+          gradle :android:app:assembleDebug --stacktrace > android-build.log 2>&1
+          result=$?
+          tail -n 80 android-build.log
+          exit $result
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: osr-android-build-log
+          path: android-build.log
+          if-no-files-found: ignore
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

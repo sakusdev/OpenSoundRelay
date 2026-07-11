@@ -3,9 +3,11 @@
 package dev.sakus.osr
 
 class VolumeSynchronizer(initial: OsrProtocol.VolumeCommand) {
+    @Volatile
     var current: OsrProtocol.VolumeCommand = initial
         private set
 
+    @Synchronized
     fun applyParentCommand(command: OsrProtocol.VolumeCommand): Boolean {
         if (current.streamId != 0 && command.streamId != current.streamId) {
             return false
@@ -20,8 +22,9 @@ class VolumeSynchronizer(initial: OsrProtocol.VolumeCommand) {
     }
 
     fun applyGainToPcmS16Le(buffer: ByteArray, length: Int) {
-        val gain = current.gainPpm.coerceIn(0, 2_000_000)
-        val muted = current.muted || gain == 0
+        val snapshot = current
+        val gain = snapshot.gainPpm.coerceIn(0, 2_000_000)
+        val muted = snapshot.muted || gain == 0
         var index = 0
         while (index + 1 < length) {
             if (muted) {

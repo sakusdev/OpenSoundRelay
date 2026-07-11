@@ -8,7 +8,10 @@ import kotlin.math.roundToInt
 import kotlin.math.tanh
 
 data class AudioQualitySettings(
-    val targetFrames: Int = 4,
+    val targetFrames: Int = 2,
+    val minFrames: Int = 1,
+    val maxFrames: Int = 10,
+    val stableFramesBeforeShrink: Int = 200,
     val adaptiveLatency: Boolean = true,
     val bassDb: Float = 0f,
     val trebleDb: Float = 0f,
@@ -16,21 +19,30 @@ data class AudioQualitySettings(
 ) {
     companion object {
         fun lowLatency(bassDb: Float = 0f, trebleDb: Float = 0f) = AudioQualitySettings(
-            targetFrames = 2,
+            targetFrames = 1,
+            minFrames = 1,
+            maxFrames = 6,
+            stableFramesBeforeShrink = 200,
             adaptiveLatency = true,
             bassDb = bassDb,
             trebleDb = trebleDb,
         )
 
         fun balanced(bassDb: Float = 0f, trebleDb: Float = 0f) = AudioQualitySettings(
-            targetFrames = 4,
+            targetFrames = 2,
+            minFrames = 1,
+            maxFrames = 10,
+            stableFramesBeforeShrink = 200,
             adaptiveLatency = true,
             bassDb = bassDb,
             trebleDb = trebleDb,
         )
 
         fun stable(bassDb: Float = 0f, trebleDb: Float = 0f) = AudioQualitySettings(
-            targetFrames = 8,
+            targetFrames = 4,
+            minFrames = 2,
+            maxFrames = 16,
+            stableFramesBeforeShrink = 300,
             adaptiveLatency = true,
             bassDb = bassDb,
             trebleDb = trebleDb,

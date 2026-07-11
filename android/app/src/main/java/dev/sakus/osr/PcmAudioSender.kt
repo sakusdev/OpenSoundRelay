@@ -11,6 +11,7 @@ import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -32,11 +33,16 @@ class PcmAudioSender(
 
     private val running = AtomicBoolean(false)
     private val gainPpm = AtomicInteger(1_000_000)
+    private val bitrateKbps = AtomicInteger(DEFAULT_BITRATE_KBPS)
     private val nativeVolumeSyncEnabled = AtomicBoolean(false)
     private var worker: Thread? = null
 
     fun setGainPpm(value: Int) {
         gainPpm.set(value.coerceIn(0, 2_000_000))
+    }
+
+    fun setBitrateKbps(value: Int) {
+        bitrateKbps.set(value.coerceIn(NativeOpusEncoder.MIN_BITRATE_KBPS, NativeOpusEncoder.MAX_BITRATE_KBPS))
     }
 
     fun setNativeVolumeSyncEnabled(enabled: Boolean) {
@@ -49,7 +55,8 @@ class PcmAudioSender(
             return
         }
         if (!running.compareAndSet(false, true)) return
-        worker = thread(name = "osr-pcm-sender") {
+        worker = thread(name = "osr-opus-sender", priority = Thread.MAX_PRIORITY) {
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
             try {
                 runLoop()
             } finally {
@@ -97,7 +104,7 @@ class PcmAudioSender(
     }
 
     private fun captureAndSend() {
-        val sampleRate = 48_000
+        val sampleRate = SAMPLE_RATE
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
         val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
@@ -107,14 +114,16 @@ class PcmAudioSender(
             return
         }
 
-        val frameBytes = sampleRate / 100 * 2
-        val recordBufferSize = maxOf(minBuffer, frameBytes * 4)
+        val frameSamples = sampleRate * FRAME_DURATION_US / 1_000_000
+        val frameBytes = frameSamples * 2
+        val recordBufferSize = maxOf(minBuffer, frameBytes * 2)
         val payload = ByteArray(frameBytes)
         var packetSequence = 1L
         var frameSequence = 1L
         var volumeSequence = 1L
         var deviceVolumeSequence = 1L
         var statusCounter = 0L
+        var encodeFailures = 0L
         val streamId = 1
         val epoch = System.currentTimeMillis().coerceAtLeast(1L)
 
@@ -126,25 +135,66 @@ class PcmAudioSender(
             return
         }
 
-        val socket = DatagramSocket()
+        val initialBitrate = bitrateKbps.get()
+        val opusEncoder = NativeOpusEncoder.create(
+            sampleRate = sampleRate,
+            channelCount = 1,
+            frameSamples = frameSamples,
+            bitrateKbps = initialBitrate,
+        )
+        var appliedBitrate = initialBitrate
+        val socket = DatagramSocket().apply {
+            sendBufferSize = maxOf(sendBufferSize, 64 * 1024)
+        }
 
         try {
             recorder.startRecording()
-            status("Sending ${captureSource.label()} PCM to ${targets.size} target(s)")
+            val codecText = if (opusEncoder != null) "Opus ${appliedBitrate}kbps" else "PCM fallback 768kbps"
+            status("Sending ${captureSource.label()} · $codecText · 5ms frames")
 
             while (running.get()) {
-                val read = recorder.read(payload, 0, payload.size)
-                if (read <= 0) continue
+                val read = recorder.read(
+                    payload,
+                    0,
+                    payload.size,
+                    AudioRecord.READ_BLOCKING,
+                )
+                if (read != payload.size) continue
+
+                val requestedBitrate = bitrateKbps.get()
+                if (opusEncoder != null && requestedBitrate != appliedBitrate) {
+                    if (opusEncoder.setBitrateKbps(requestedBitrate)) appliedBitrate = requestedBitrate
+                }
+
+                val encoded = opusEncoder?.encode(payload, read)
+                val codec: Int
+                val sampleFormat: Int
+                val audioPayload: ByteArray
+                if (opusEncoder != null) {
+                    if (encoded == null) {
+                        encodeFailures++
+                        continue
+                    }
+                    codec = OsrProtocol.CODEC_OPUS
+                    sampleFormat = OsrProtocol.SAMPLE_FORMAT_NONE
+                    audioPayload = encoded
+                } else {
+                    codec = OsrProtocol.CODEC_PCM_S16LE
+                    sampleFormat = OsrProtocol.SAMPLE_FORMAT_S16LE
+                    audioPayload = payload.copyOf()
+                }
 
                 val nowUs = System.nanoTime() / 1_000L
-                val audioFrame = OsrProtocol.encodePcmAudioFrame(
+                val audioFrame = OsrProtocol.encodeAudioFrame(
                     streamId = streamId,
                     mediaTimeUs = nowUs,
                     frameSequence = frameSequence,
                     sampleRateHz = sampleRate,
                     channels = 1,
-                    frameDurationUs = 10_000,
-                    pcmPayload = if (read == payload.size) payload else payload.copyOf(read),
+                    codec = codec,
+                    sampleFormat = sampleFormat,
+                    frameDurationUs = FRAME_DURATION_US,
+                    audioPayload = audioPayload,
                 )
                 val audioPacket = OsrProtocol.encodePacket(
                     OsrProtocol.KIND_AUDIO,
@@ -153,7 +203,7 @@ class PcmAudioSender(
                 )
 
                 val controlPackets = mutableListOf<ByteArray>()
-                if (frameSequence % 10L == 0L) {
+                if (frameSequence % CONTROL_INTERVAL_FRAMES == 0L) {
                     val command = OsrProtocol.VolumeCommand(
                         streamId = streamId,
                         epoch = epoch,
@@ -200,7 +250,7 @@ class PcmAudioSender(
 
                 frameSequence++
                 statusCounter++
-                if (statusCounter % 100L == 0L || failed > 0) {
+                if (statusCounter % STATUS_INTERVAL_FRAMES == 0L || failed > 0) {
                     val native = if (nativeVolumeSyncEnabled.get()) {
                         runCatching { nativeVolumeProvider?.invoke() }.getOrNull()
                     } else {
@@ -208,8 +258,11 @@ class PcmAudioSender(
                     }
                     status(
                         buildString {
-                            append("Fan-out ${captureSource.label()} targets=${targets.size} ")
-                            append("failed=$failed stream=${gainPpm.get() / 10_000}%")
+                            append("${captureSource.label()} ")
+                            append(if (opusEncoder != null) "Opus ${appliedBitrate}kbps" else "PCM fallback")
+                            append(" · 5ms · targets=${targets.size} failed=$failed")
+                            append(" stream=${gainPpm.get() / 10_000}%")
+                            if (encodeFailures > 0) append(" encode-errors=$encodeFailures")
                             if (native != null) {
                                 append(" native=${native.percent}%")
                                 if (native.muted) append(" muted")
@@ -219,6 +272,7 @@ class PcmAudioSender(
                 }
             }
         } finally {
+            opusEncoder?.close()
             runCatching { recorder.stop() }
             recorder.release()
             socket.close()
@@ -232,13 +286,17 @@ class PcmAudioSender(
         recordBufferSize: Int,
     ): AudioRecord {
         return when (val source = captureSource) {
-            CaptureSource.Microphone -> AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                sampleRate,
-                channelConfig,
-                audioFormat,
-                recordBufferSize,
-            )
+            CaptureSource.Microphone -> AudioRecord.Builder()
+                .setAudioSource(MediaRecorder.AudioSource.MIC)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(audioFormat)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(channelConfig)
+                        .build(),
+                )
+                .setBufferSizeInBytes(recordBufferSize)
+                .build()
 
             is CaptureSource.Playback -> createPlaybackAudioRecord(
                 source.mediaProjection,
@@ -276,14 +334,18 @@ class PcmAudioSender(
             .build()
     }
 
-    private fun CaptureSource.label(): String {
-        return when (this) {
-            CaptureSource.Microphone -> "microphone"
-            is CaptureSource.Playback -> "device playback"
-        }
+    private fun CaptureSource.label(): String = when (this) {
+        CaptureSource.Microphone -> "microphone"
+        is CaptureSource.Playback -> "device playback"
     }
 
     companion object {
+        const val DEFAULT_BITRATE_KBPS = 128
+        const val FRAME_DURATION_US = 5_000
+        private const val SAMPLE_RATE = 48_000
+        private const val CONTROL_INTERVAL_FRAMES = 20L
+        private const val STATUS_INTERVAL_FRAMES = 200L
+
         fun parseTargets(raw: String, defaultPort: Int): List<InetSocketAddress> {
             return raw
                 .split(',', ';', '\n')

@@ -22,6 +22,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -156,9 +157,9 @@ class MainActivity : Activity() {
         }
 
         val tabViews = listOf(
-            tab("⌁", "接続"),
-            tab("◖))", "音響"),
-            tab("▂▅▇", "ステータス"),
+            tab(R.drawable.ic_tab_connection, "接続"),
+            tab(R.drawable.ic_tab_audio, "音響"),
+            tab(R.drawable.ic_tab_status, "ステータス"),
         )
         tabViews.forEachIndexed { index, view ->
             tabs.addView(view, LinearLayout.LayoutParams(0, dp(112), 1f).apply {
@@ -464,22 +465,54 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun tab(icon: String, label: String) = LinearLayout(this).apply {
+    private fun tab(iconRes: Int, label: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER
+        gravity = Gravity.CENTER_HORIZONTAL
         isClickable = true
         isFocusable = true
-        addView(text(icon, 24f, TEXT, true).apply { gravity = Gravity.CENTER })
+        setPadding(0, dp(14), 0, 0)
+
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(iconRes)
+            imageTintList = tint(TEXT)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+        }, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        })
+
         addView(text(label, 16f, TEXT, true).apply {
             gravity = Gravity.CENTER
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(7), 0, 0)
         })
+
+        addView(View(this@MainActivity).apply {
+            tag = TAB_SPACER_TAG
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f,
+        ))
+
+        addView(View(this@MainActivity).apply {
+            tag = TAB_INDICATOR_TAG
+            setBackgroundColor(Color.TRANSPARENT)
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(4),
+        ))
     }
 
     private fun styleTab(tab: LinearLayout, selected: Boolean) {
+        val color = if (selected) ACCENT else TEXT
         tab.background = background(if (selected) ACCENT_SOFT else Color.TRANSPARENT, Color.TRANSPARENT, 20)
         for (index in 0 until tab.childCount) {
-            (tab.getChildAt(index) as? TextView)?.setTextColor(if (selected) ACCENT else TEXT)
+            when (val child = tab.getChildAt(index)) {
+                is ImageView -> child.imageTintList = tint(color)
+                is TextView -> child.setTextColor(color)
+                else -> if (child.tag == TAB_INDICATOR_TAG) {
+                    child.setBackgroundColor(if (selected) ACCENT else Color.TRANSPARENT)
+                }
+            }
         }
     }
 
@@ -596,6 +629,8 @@ class MainActivity : Activity() {
         private const val REQUEST_MIC = 1001
         private const val REQUEST_PLAYBACK = 1002
         private const val REQUEST_PROJECTION = 2001
+        private const val TAB_SPACER_TAG = "tab-spacer"
+        private const val TAB_INDICATOR_TAG = "tab-indicator"
         private val BG = Color.rgb(247, 248, 251)
         private val SURFACE = Color.WHITE
         private val INPUT = Color.rgb(249, 250, 252)
